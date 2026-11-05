@@ -20,7 +20,9 @@ For example:
 | `fix` | A bug fix |
 | `docs` | Documentation only |
 | `test` | Tests only |
-| `chore` | Dependencies, CI, skill updates, and upkeep |
+| `refactor` | Restructuring code without changing behavior |
+| `ci` | CI workflows and build automation |
+| `chore` | Dependencies, skill updates, and upkeep |
 
 ## Rules
 

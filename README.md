@@ -10,6 +10,7 @@ Ivy is an AI tutor that sees your screen and explains things by talking and draw
 | `skills/jazz/` | [sabique-islam/jazz](https://github.com/sabique-islam/jazz): architecture, infrastructure, and cost | Git submodule |
 | `skills/sui/` | [sabique-islam/sui](https://github.com/sabique-islam/sui): engineering, AI evals, testing, security, and review | Git submodule |
 | `skills/shadowfax/` | [sabique-islam/shadowfax](https://github.com/sabique-islam/shadowfax): go-to-market | Git submodule |
+| `skills/ponytail/` | [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail): write the least code that works | Git submodule |
 | `.agents/skills/` | All the skills in one flat folder, built from `skills/` | Rebuilt by a script, not committed |
 
 ## Set up
@@ -46,6 +47,18 @@ scripts/export-skills.sh --dest .claude/skills
 ```
 
 Otherwise, Claude can read a skill by path, as `CLAUDE.md` tells it to. Start a new session after exporting so the skills are picked up.
+
+Ponytail's plugin adds session hooks and slash commands that the export doesn't include. It's optional, and in Claude Code you type each of these in its own prompt:
+
+```text
+/plugin marketplace add DietrichGebert/ponytail
+```
+
+```text
+/plugin install ponytail@ponytail
+```
+
+The plugin can apply outside this repo, so check its [install guide](https://github.com/DietrichGebert/ponytail/blob/main/INSTALL.md) first.
 
 Run Jazz's scripts with `.venv/bin/python`, because they need the dependencies you installed during setup.
 

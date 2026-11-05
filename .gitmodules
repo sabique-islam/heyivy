@@ -10,3 +10,7 @@
 	path = skills/shadowfax
 	url = https://github.com/sabique-islam/shadowfax.git
 	branch = main
+[submodule "skills/ponytail"]
+	path = skills/ponytail
+	url = https://github.com/DietrichGebert/ponytail.git
+	branch = main

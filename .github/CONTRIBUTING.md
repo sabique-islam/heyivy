@@ -32,7 +32,7 @@ Ivy handles screens, voices, and transcripts:
 
 ## Skills
 
-`skills/jazz`, `skills/sui`, and `skills/shadowfax` are git submodules. Don't edit them here, because fixes belong in their own repos. The [README](../README.md#skills) explains how to update them. Read the changes first, since agents follow these files as instructions.
+`skills/jazz`, `skills/sui`, `skills/shadowfax`, and `skills/ponytail` are git submodules. Don't edit them here, because fixes belong in their own repos. The [README](../README.md#skills) explains how to update them. Read the changes first, since agents follow these files as instructions.
 
 ## Checks
 

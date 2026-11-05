@@ -7,6 +7,7 @@ Ivy is an AI tutor that sees your screen and explains things by talking and draw
 - **Sui** (`sui`, `sui-*`): engineering work, including AI evals, testing, security, and code review.
 - **Jazz** (`jazz`, `jazz-*`): architecture, infrastructure, and cost decisions. Only use it when asked by name, or for those decisions. It has no guidance on Swift or macOS.
 - **Shadowfax** (`shadowfax` and its skills): go-to-market work only.
+- **Ponytail** (`ponytail`, `ponytail-*`): use it to keep code changes small, when asked by name or when a change is growing. It doesn't override the clarity rules below, so never make code harder to read to make it shorter.
 
 When these overlap, use Sui for code changes and reviews.
 
@@ -21,7 +22,7 @@ The app and Worker are in this repo, based on `farzaa/clicky` at `e71105c`. The 
 
 ## Where the skills live
 
-`skills/jazz`, `skills/sui` and `skills/shadowfax` are git submodules of their GitHub repos under `sabique-islam`. Ivy pins each one to a commit. Don't edit them here, because fixes belong in their own repos.
+`skills/jazz`, `skills/sui`, `skills/shadowfax` and `skills/ponytail` are git submodules of their GitHub repos, the first three under `sabique-islam` and Ponytail under `DietrichGebert`. Ivy pins each one to a commit. Don't edit them here, because fixes belong in their own repos.
 
 Agents use `.agents/skills/<name>`, which is rebuilt and not committed. Read a skill's `SKILL.md` from there by path. Claude Code doesn't load this folder by itself.
 

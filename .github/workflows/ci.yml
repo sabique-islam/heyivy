@@ -20,7 +20,7 @@ jobs:
           # Passed through env so a crafted title can't run as shell.
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if ! printf '%s' "$PR_TITLE" | grep -Eq '^\[(feat|fix|docs|test|chore)\] [^ ]'; then
+          if ! printf '%s' "$PR_TITLE" | grep -Eq '^\[(feat|fix|docs|test|chore|refactor|ci)\] [^ ]'; then
             echo "::error::Use '[type] what changed and why'. See .github/COMMIT_CONVENTION.md."
             exit 1
           fi

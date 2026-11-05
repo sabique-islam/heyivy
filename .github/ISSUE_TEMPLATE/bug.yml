@@ -1,4 +1,4 @@
-name: Bug
+name: Bug report
 description: Something in the app, Worker, scripts, or docs is wrong
 title: "[bug] "
 labels: ["bug"]

@@ -12,7 +12,9 @@ Closes #
 - [ ] `fix`: bug fix
 - [ ] `docs`: documentation only
 - [ ] `test`: tests only
-- [ ] `chore`: dependencies, CI, skill updates, or upkeep
+- [ ] `refactor`: restructuring without changing behavior
+- [ ] `ci`: CI workflows or build automation
+- [ ] `chore`: dependencies, skill updates, or upkeep
 
 ## How you tested it
 
