@@ -31,10 +31,23 @@ Only the `main` branch. There are no releases yet.
 
 These come from the original Clicky code, and they need fixing before any public release. There's no need to report them.
 
-- **Open Worker:** `worker/src/index.ts` has no authentication, and it forwards any request body. Anyone with the URL can spend the API credits.
-- **Another app's update feed:** `SUFeedURL` and `SUPublicEDKey` in `leanring-buddy/Info.plist` belong to another app. Replace both before shipping a build.
-- **Analytics:** `leanring-buddy/ClickyAnalytics.swift` has a hardcoded PostHog key from the original project, and it sends full transcripts and AI responses.
+- **Device tokens are issued by hand:** that works for the owner's own devices. Before anyone else gets a build, tokens need to come from a sign-in, ideally tied to the device with App Attest.
+- **No shared spend cap:** caps apply per device, so total exposure is the cap times the number of tokens issued. Set a monthly limit with each vendor as well.
+- **No update feed:** `Info.plist` has no update feed or signing key, and the Sparkle updater is off. Add your own before shipping a build.
+- **Analytics:** nothing is sent. `leanring-buddy/ClickyAnalytics.swift` is a stub, and events must never contain transcripts, AI responses, emails, or screen content.
 - **Permissions:** the entitlements include camera access, which Ivy doesn't need.
+
+## How the Worker is protected
+
+The Worker at `secrets.worker.ivy.ivyx.me` holds the vendor keys, and nothing else can reach them.
+
+- **Every request needs a device token,** checked before anything else, so without one you can't even learn which routes exist. Tokens are signed, expire, and identify one device. A bad signature costs no storage or vendor call.
+- **Tokens stay out of the app bundle.** They live in the Keychain of the device they were issued to.
+- **The server decides what's spent.** It sets the model, output limit, and voice, and builds each vendor request from an allow-list.
+- **Each device has limits:** requests per minute, and $10 a day and $60 a month, enforced atomically so parallel requests can't race past them. Figures are in `worker/src/policy.ts`, and are estimates at list prices.
+- **Failures don't leak.** Errors have one shape and never contain a vendor's response. Logs hold the route, status, timing, and the start of the device ID, never bodies or tokens. One exception: an error Claude reports after streaming has started reaches the app as Claude wrote it, because the stream passes through unchanged.
+
+If a token leaks, add its device ID to `REVOKED_DEVICE_IDS` in `worker/wrangler.jsonc` and deploy. If the signing key leaks, replace `DEVICE_TOKEN_SIGNING_KEY` in `.env` and on the Worker, which cuts off every device, then issue new tokens.
 
 ## Handling secrets and private data
 

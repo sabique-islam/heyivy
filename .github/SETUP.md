@@ -29,39 +29,32 @@ python3 -m venv .venv
 
 The [README](../README.md#skills) explains how to use and update them.
 
-## 3. Run the Worker locally
+## 3. Set up keys and a device token
 
-The Worker holds the API keys, so they never ship in the app.
+The Worker holds the API keys, so they never ship in the app. All keys live in one `.env` file at the repo root, which Git ignores.
+
+```bash
+cp .env.example .env
+```
+
+Fill in `.env`. The app talks to the live Worker at `https://secrets.worker.ivy.ivyx.me`, which refuses any request without a device token. This stores one in your Keychain:
+
+```bash
+scripts/mint-device-token.mjs
+```
+
+The token only works if `DEVICE_TOKEN_SIGNING_KEY` in your `.env` matches the Worker's. The first time the app reads it, macOS asks for permission. Choose Always Allow.
+
+To work on the Worker itself:
 
 ```bash
 cd worker
-npm ci
+npm test
 ```
 
-Create `worker/.dev.vars` with your keys. Git ignores this file, so never copy it anywhere that's tracked.
+`scripts/dev-worker.sh` runs it at `http://localhost:8787`. To use it from the app, change `workerBaseURL` in `CompanionManager.swift` and `tokenProxyURL` in `AssemblyAIStreamingTranscriptionProvider.swift`.
 
-```text
-ANTHROPIC_API_KEY=your-key
-ASSEMBLYAI_API_KEY=your-key
-ELEVENLABS_API_KEY=your-key
-ELEVENLABS_VOICE_ID=your-voice-id
-```
-
-Then start it. It usually runs at `http://localhost:8787`.
-
-```bash
-npx wrangler dev
-```
-
-## 4. Point the app at your Worker
-
-Find the Worker URLs in the Swift code, and replace them with your local URL:
-
-```bash
-grep -rnE "clicky-proxy|your-worker-name" leanring-buddy/
-```
-
-## 5. Build the app
+## 4. Build the app
 
 ```bash
 open leanring-buddy.xcodeproj
@@ -79,7 +72,9 @@ Build from Xcode. Running `xcodebuild` in the terminal invalidates these macOS p
 
 ## Before you deploy or share a build
 
-Read [Known risks](SECURITY.md#known-risks) first. Don't run `npx wrangler deploy` or use `scripts/release.sh` until those are fixed.
+Read [Known risks](SECURITY.md#known-risks) first, and don't use `scripts/release.sh` until those are fixed.
+
+To deploy the Worker, run `npm test` in `worker/`, then `npx wrangler deploy`. Secrets are set separately with `npx wrangler secret put <NAME>`.
 
 ## If something goes wrong
 
