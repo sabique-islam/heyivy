@@ -84,6 +84,10 @@ The app never calls external APIs directly. All requests go through a Cloudflare
 
 The Worker runs at `https://secrets.worker.ivy.ivyx.me`. Every route needs `Authorization: Bearer <device token>`, read from the Keychain by `WorkerDeviceToken.swift`. The server sets the model and output limits, and ignores any the app sends, so the app's model picker has no effect. Each device has its own rate and spend limits, in `worker/src/policy.ts`, enforced by the `DeviceLimiter` Durable Object.
 
+The Worker is pinned to Mumbai (`aws:ap-south-1`) in `wrangler.jsonc`. Unpinned, requests from India sometimes ran in Hong Kong, where Anthropic answers 403. Mumbai gave first audio in about 0.87 s, against 1.47 s from the US. Revisit this when users are elsewhere.
+
+The older Worker `ivy-proxy` at `api.ivy.ivyx.me` is separate. Leave it alone: this repo's config and deploys don't touch it.
+
 Worker secrets: `ANTHROPIC_API_KEY`, `ASSEMBLYAI_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `DEVICE_TOKEN_SIGNING_KEY`
 Worker vars: `REVOKED_DEVICE_IDS`
 
