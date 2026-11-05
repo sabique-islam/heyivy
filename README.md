@@ -14,7 +14,7 @@ Ivy is an AI tutor that sees your screen and explains things by talking and draw
 
 ## Set up
 
-You need Git, Python 3.11 or later, and GitHub access to `sabique-islam/jazz`, which is private. If cloning Jazz fails, run `gh auth setup-git` and try again.
+The full guide, including the Worker and app, is in [SETUP.md](.github/SETUP.md). For just the skills, you need Git, Python 3.11 or later, and GitHub access to `sabique-islam/jazz`, which is private. If cloning Jazz fails, run `gh auth setup-git` and try again.
 
 ```bash
 git clone --recurse-submodules git@github.com:sabique-islam/heyivy.git
@@ -134,3 +134,7 @@ Two of its rules are easy to break:
 ## Licences
 
 Clicky is MIT licensed, and its [licence notice](LICENSE) must stay with the code. Each pack has its own terms in its repo.
+
+## Contributing
+
+Read [CONTRIBUTING.md](.github/CONTRIBUTING.md) and the [commit convention](.github/COMMIT_CONVENTION.md). Report vulnerabilities using the [security policy](.github/SECURITY.md). Everyone here follows the [Code of Conduct](.github/CODE_OF_CONDUCT.md).

@@ -1,0 +1,28 @@
+name: Feature
+description: Suggest something Ivy should do
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe a real moment where this got in the way.
+      placeholder: Who hit this, what they were learning, and what they did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: ask
+    attributes:
+      label: What you want
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Other options you considered
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and cost
+      description: Would this store or send more screen, audio, or transcript data, or call a paid API more often?

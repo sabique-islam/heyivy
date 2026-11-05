@@ -1,0 +1,50 @@
+name: Bug
+description: Something in the app, Worker, scripts, or docs is wrong
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Search existing issues first. Don't include secrets, private screenshots, or transcripts.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Voice input
+        - Screen capture
+        - Drawing or overlay
+        - Voice output
+        - AI response
+        - Worker
+        - Skills or scripts
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      placeholder: I expected X, and got Y.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      placeholder: Steps, what was on screen (described, not shown), and what you asked.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: macOS 15.1, Apple M2, two monitors, commit abc1234
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Remove keys, tokens, and transcripts first.
+      render: text

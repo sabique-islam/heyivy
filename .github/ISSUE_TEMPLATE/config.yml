@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Setup guide
+    url: https://github.com/sabique-islam/heyivy/blob/main/.github/SETUP.md
+    about: Getting the app, Worker, or skills running.
+  - name: Security policy
+    url: https://github.com/sabique-islam/heyivy/blob/main/.github/SECURITY.md
+    about: Report vulnerabilities privately, not in an issue.

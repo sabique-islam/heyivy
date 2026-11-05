@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    name: PR title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check the title follows COMMIT_CONVENTION.md
+        env:
+          # Passed through env so a crafted title can't run as shell.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! printf '%s' "$PR_TITLE" | grep -Eq '^\[(feat|fix|docs|test|chore)\] [^ ]'; then
+            echo "::error::Use '[type] what changed and why'. See .github/COMMIT_CONVENTION.md."
+            exit 1
+          fi
+
+  scripts:
+    name: Scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Shellcheck
+        run: shellcheck -S warning scripts/export-skills.sh
+
+  worker:
+    name: Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - name: Install
+        working-directory: worker
+        run: npm ci
+      - name: Build without deploying
+        working-directory: worker
+        run: npx wrangler deploy --dry-run --outdir dist
+
+  skills:
+    name: Skills
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the skills export
+        env:
+          # Jazz is private, so this needs a read-only token. Pull requests from forks don't get it.
+          SKILLS_TOKEN: ${{ secrets.SKILLS_TOKEN }}
+        run: |
+          if [ -z "$SKILLS_TOKEN" ]; then
+            echo "::notice::Skipped because the SKILLS_TOKEN secret isn't set."
+            exit 0
+          fi
+          git -c "url.https://x-access-token:${SKILLS_TOKEN}@github.com/.insteadOf=https://github.com/" \
+            submodule update --init --depth 1
+          scripts/export-skills.sh
+          scripts/export-skills.sh --check
