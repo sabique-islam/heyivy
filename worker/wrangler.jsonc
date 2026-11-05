@@ -10,7 +10,7 @@
   "routes": [{ "pattern": "secrets.worker.ivy.ivyx.me", "custom_domain": true }],
   // Workers normally run at the nearest Cloudflare site. Some, like Hong Kong, are in regions
   // Anthropic doesn't serve, and it answers 403. Pinning the region makes that impossible.
-  "placement": { "mode": "targeted", "region": "aws:ap-south-1" },
+  "placement": { "mode": "targeted", "region": "aws:us-east-1" },
 
   "workers_dev": false,
   "preview_urls": false,
