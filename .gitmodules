@@ -1,0 +1,12 @@
+[submodule "skills/jazz"]
+	path = skills/jazz
+	url = https://github.com/sabique-islam/jazz.git
+	branch = main
+[submodule "skills/sui"]
+	path = skills/sui
+	url = https://github.com/sabique-islam/sui.git
+	branch = master
+[submodule "skills/shadowfax"]
+	path = skills/shadowfax
+	url = https://github.com/sabique-islam/shadowfax.git
+	branch = main
