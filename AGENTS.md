@@ -13,6 +13,7 @@ When these overlap, use Sui for code changes and reviews.
 
 ## Rules
 
+- All keys live in the root `.env`, which is never committed. `scripts/dev-worker.sh` loads them, and `.env.example` lists the names. Never print or log their values.
 - Ivy isn't live, so Jazz recommendations use `system_stage: pre_launch`.
 - Run Jazz's scripts with `.venv/bin/python`.
 
@@ -68,7 +69,7 @@ All API keys live on a Cloudflare Worker proxy — nothing sensitive ships in th
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
 - **Element Pointing**: Claude embeds `[POINT:x,y:label:screenN]` tags in responses. The overlay parses these, maps coordinates to the correct monitor, and animates the blue cursor along a bezier arc to the target.
 - **Concurrency**: `@MainActor` isolation, async/await throughout
-- **Analytics**: PostHog via `ClickyAnalytics.swift`
+- **Analytics**: Nothing is sent. `ClickyAnalytics.swift` is a stub until Ivy has its own key, and events must never contain transcripts, AI responses, emails, or screen content.
 
 ### API Proxy (Cloudflare Worker)
 
@@ -78,10 +79,13 @@ The app never calls external APIs directly. All requests go through a Cloudflare
 |-------|----------|---------|
 | `POST /chat` | `api.anthropic.com/v1/messages` | Claude vision + streaming chat |
 | `POST /tts` | `api.elevenlabs.io/v1/text-to-speech/{voiceId}` | ElevenLabs TTS audio |
-| `POST /transcribe-token` | `streaming.assemblyai.com/v3/token` | Fetches a short-lived (480s) AssemblyAI websocket token |
+| `GET /voice` (WebSocket) | `api.elevenlabs.io/v1/text-to-speech/{voiceId}/stream-input` | Streams text in, and audio with character timings out. Not used by the app yet |
+| `POST /transcribe-token` | `streaming.assemblyai.com/v3/token` | Fetches an AssemblyAI token that expires in 60s and limits its session to 300s |
 
-Worker secrets: `ANTHROPIC_API_KEY`, `ASSEMBLYAI_API_KEY`, `ELEVENLABS_API_KEY`
-Worker vars: `ELEVENLABS_VOICE_ID`
+The Worker runs at `https://secrets.worker.ivy.ivyx.me`. Every route needs `Authorization: Bearer <device token>`, read from the Keychain by `WorkerDeviceToken.swift`. The server sets the model and output limits, and ignores any the app sends, so the app's model picker has no effect. Each device has its own rate and spend limits, in `worker/src/policy.ts`, enforced by the `DeviceLimiter` Durable Object.
+
+Worker secrets: `ANTHROPIC_API_KEY`, `ASSEMBLYAI_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `DEVICE_TOKEN_SIGNING_KEY`
+Worker vars: `REVOKED_DEVICE_IDS`
 
 ### Key Architecture Decisions
 
@@ -118,10 +122,21 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `ElevenLabsTTSClient.swift` | ~81 | ElevenLabs TTS client. Sends text to the Worker proxy, plays back audio via `AVAudioPlayer`. Exposes `isPlaying` for transient cursor scheduling. |
 | `ElementLocationDetector.swift` | ~335 | Detects UI element locations in screenshots for cursor pointing. |
 | `DesignSystem.swift` | ~880 | Design system tokens — colors, corner radii, shared styles. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |
-| `ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
+| `ClickyAnalytics.swift` | ~100 | Analytics event stub. Sends nothing yet. |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
-| `worker/src/index.ts` | ~142 | Cloudflare Worker proxy. Three routes: `/chat` (Claude), `/tts` (ElevenLabs), `/transcribe-token` (AssemblyAI temp token). |
+| `WorkerDeviceToken.swift` | ~46 | Reads the Worker device token from the Keychain and adds it to requests. |
+| `worker/src/index.ts` | ~70 | Worker entry point. Authenticates, routes, and logs each request. |
+| `worker/src/auth.ts` | ~60 | Verifies device tokens. Fails closed if the signing key is missing or weak. |
+| `worker/src/policy.ts` | ~75 | Every limit, price, and model choice the Worker enforces. |
+| `worker/src/device-limiter.ts` | ~125 | Durable Object holding one device's rate and spend counters. |
+| `worker/src/spend.ts` | ~55 | Reserves spend for a request and corrects it once the true cost is known. |
+| `worker/src/chat.ts` | ~265 | `/chat`: validates against an allow-list, streams Claude's reply, reads token usage, and handles timeouts and cancellation. |
+| `worker/src/speech.ts` | ~245 | `/tts` and the `/voice` WebSocket relay to ElevenLabs. |
+| `worker/src/transcribe.ts` | ~45 | `/transcribe-token`: short-lived AssemblyAI tokens. |
+| `worker/src/http.ts` | ~135 | The one error shape and bounded JSON reading. |
+| `worker/test/worker.test.ts` | ~560 | Security and behavior tests. Vendors are faked, so they cost nothing. |
+| `scripts/mint-device-token.mjs` | ~70 | Issues a device token and stores it in the Keychain, without printing it. |
 
 ## Build & Run
 
@@ -143,17 +158,21 @@ open leanring-buddy.xcodeproj
 cd worker
 npm install
 
-# Add secrets
+# Test and type check. Run after any Worker change, and rerun `npm run types` if the config changes.
+npm test
+npm run typecheck
+
+# Add secrets, one for each name listed under "API Proxy"
 npx wrangler secret put ANTHROPIC_API_KEY
-npx wrangler secret put ASSEMBLYAI_API_KEY
-npx wrangler secret put ELEVENLABS_API_KEY
 
 # Deploy
 npx wrangler deploy
 
-# Local dev (create worker/.dev.vars with your keys)
-npx wrangler dev
+# Local dev, using the keys in the root .env
+../scripts/dev-worker.sh
 ```
+
+To issue a device token, run `scripts/mint-device-token.mjs`. To revoke one, add its device ID to `REVOKED_DEVICE_IDS` in `worker/wrangler.jsonc` and deploy.
 
 ## Code Style & Conventions
 

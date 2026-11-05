@@ -140,9 +140,7 @@ Two of its rules are easy to break:
 
 ### Don't ship it as it is
 
-- The Worker has no authentication, so anyone with its URL can spend your API credits.
-- `leanring-buddy/Info.plist` has an update feed and signing key that belong to another app.
-- `leanring-buddy/ClickyAnalytics.swift` has a hardcoded PostHog key, and it sends full transcripts and AI responses.
+- `leanring-buddy/Info.plist` has no update feed yet, so builds can't update themselves.
 
 ## Licences
 

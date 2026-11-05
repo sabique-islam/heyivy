@@ -13,6 +13,7 @@ __pycache__/
 # Clicky
 worker/node_modules/
 worker/.dev.vars
+worker/.wrangler/
 *.xcuserstate
 build/
 releases/
