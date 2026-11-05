@@ -1,0 +1,34 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ivy-secrets-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-04",
+  // Lets a client disconnect abort the upstream call, so an interrupt stops the spend.
+  "compatibility_flags": ["enable_request_signal"],
+
+  // The custom domain is the only way in. The default hostnames would be a second front door.
+  "routes": [{ "pattern": "secrets.worker.ivy.ivyx.me", "custom_domain": true }],
+  // Workers normally run at the nearest Cloudflare site. Some, like Hong Kong, are in regions
+  // Anthropic doesn't serve, and it answers 403. Pinning the region makes that impossible.
+  "placement": { "mode": "targeted", "region": "aws:ap-south-1" },
+
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // Our own log lines only. They carry route, status and timing, never bodies or tokens.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "invocation_logs": false }
+  },
+
+  "durable_objects": {
+    "bindings": [{ "name": "DEVICE_LIMITER", "class_name": "DeviceLimiter" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DeviceLimiter"] }],
+
+  "vars": {
+    // Comma-separated device IDs. Add one and deploy to cut that device off.
+    "REVOKED_DEVICE_IDS": "WEc6LUv815R8SvkY0h__UA,gZdKgAImLUEWrsAckCkDiw"
+  }
+}
