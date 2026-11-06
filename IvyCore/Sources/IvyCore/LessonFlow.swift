@@ -228,7 +228,7 @@ public struct LessonStateMachine: Sendable {
             return [.playThinkingCue, .captureScreensAndAsk(currentLessonID)]
 
         case .firstAudioPlayed(let lessonID):
-            guard phase == .thinking else { return [] }
+            guard lessonID == currentLessonID, phase == .thinking else { return [] }
             phase = .speaking
             return []
 
