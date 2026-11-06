@@ -142,6 +142,10 @@ Worker vars: `REVOKED_DEVICE_IDS`
 | `worker/test/worker.test.ts` | ~560 | Security and behavior tests. Vendors are faked, so they cost nothing. |
 | `IvyCore/Sources/IvyCore/SpeechTimeline.swift` | ~150 | Turns ElevenLabs character timings into word times, checking whether each chunk counts from the stream start or its own start. |
 | `IvyCore/Sources/IvyCore/PlaybackClock.swift` | ~185 | The clock of what's actually been heard, the stall guard that pauses playback when audio runs low, and the scheduler that hands out due words. |
+| `IvyCore/Sources/IvyCore/LessonScriptParser.swift` | ~440 | Splits Claude's streamed script into speech and marks (`{{spoken words|kind|visible text|x,y}}`), however the stream is chunked. Strips Markdown from speech and enforces the mark limits. |
+| `IvyCore/Sources/IvyCore/TargetResolver.swift` | ~220 | Finds each mark's target among on-device text recognition results, dropping it when text and position disagree, and converts screenshot pixels to screen points. |
+| `IvyCore/Sources/IvyCore/LessonFlow.swift` | ~275 | Times marks to their words, with a limit of 5 on screen, and the lesson state machine with IDs, interrupts, and the failure rules. |
+| `IvyCore/Tests/IvyCoreTests/` | ~870 | 87 tests, including every split point, random splits, and fuzzed input for the parser. |
 | `IvyCore/Sources/VoiceSyncLab/` | ~900 | Developer tool for drawing plan D1. Plays real speech or test clicks, draws on each word, and measures sync with the mic. Run it with `scripts/voice-sync-lab.sh`. Not part of the app. |
 | `scripts/mint-device-token.mjs` | ~70 | Issues a device token and stores it in the Keychain, without printing it. |
 
