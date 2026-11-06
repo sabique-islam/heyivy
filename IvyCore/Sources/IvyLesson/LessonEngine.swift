@@ -152,17 +152,20 @@ public final class LessonEngine {
     private func startTextRecognition(on screen: LessonScreen) {
         let fullResolutionImage = screen.fullResolutionImage
         let sentImageSize = screen.geometry.imagePixelSize
+        // Recognition takes a few hundred milliseconds, so it runs off the main thread while
+        // Claude is still thinking.
         Task.detached(priority: .userInitiated) { [weak self] in
             let words = (try? ScreenTextRecognizer.recognizeWords(in: fullResolutionImage, reportedInPixelSize: sentImageSize)) ?? []
-            await MainActor.run {
-                guard let self else { return }
-                self.timingLog.record("text recognition done (\(words.count) words)")
-                self.recognizedWords = words
-                let waitingMarks = self.marksWaitingForTextRecognition
-                self.marksWaitingForTextRecognition = []
-                waitingMarks.forEach(self.resolve)
-            }
+            await self?.textRecognitionFinished(with: words)
         }
+    }
+
+    private func textRecognitionFinished(with words: [RecognizedWord]) {
+        timingLog.record("text recognition done (\(words.count) words)")
+        recognizedWords = words
+        let waitingMarks = marksWaitingForTextRecognition
+        marksWaitingForTextRecognition = []
+        waitingMarks.forEach(resolve)
     }
 
     private func resolve(_ markRequest: MarkRequest) {

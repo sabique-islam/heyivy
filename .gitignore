@@ -21,4 +21,5 @@ coding-plans/
 
 # Swift package build output
 IvyCore/.build/
+IvyCore/.build-xcode/
 IvyCore/.swiftpm/

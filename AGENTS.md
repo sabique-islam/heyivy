@@ -67,7 +67,7 @@ All API keys live on a Cloudflare Worker proxy — nothing sensitive ships in th
 - **Text-to-Speech**: ElevenLabs (`eleven_flash_v2_5` model) via Cloudflare Worker proxy
 - **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
-- **Element Pointing**: Claude embeds `[POINT:x,y:label:screenN]` tags in responses. The overlay parses these, maps coordinates to the correct monitor, and animates the blue cursor along a bezier arc to the target.
+- **Lessons and marks**: a lesson runs through `LessonEngine` in the `IvyCore` package, which Xcode uses as a local package. Claude writes one script where marks wrap the words they belong to (`{{spoken words|kind|visible text|x,y}}`). The speech streams to ElevenLabs over the Worker's `/voice` socket, marks snap to text found by on-device recognition, and each mark draws as its words are heard. Clicky's `[POINT:...]` tags and blue-cursor pointing are no longer used for answers, and the model picker has no effect, since the Worker chooses the model.
 - **Concurrency**: `@MainActor` isolation, async/await throughout
 - **Analytics**: Nothing is sent. `ClickyAnalytics.swift` is a stub until Ivy has its own key, and events must never contain transcripts, AI responses, emails, or screen content.
 
@@ -149,6 +149,12 @@ Worker vars: `REVOKED_DEVICE_IDS`
 | `IvyCore/Sources/IvyOverlay/MarkGeometry.swift` | ~150 | Where each mark kind goes around its target so it never covers it, and the mark style, which is a bright stroke with a dark outline so marks are readable on any background. |
 | `IvyCore/Sources/IvyOverlay/MarkOverlay.swift` | ~270 | Mark layers, the click-through overlay window for each screen, and `MarkOverlayController`, which shows, fades, and clears marks. Its windows exist only while they hold marks. |
 | `IvyCore/Sources/MarkOverlayLab/` | ~300 | Developer tool for drawing plan D3. Draws marks from `IvyCore/Examples/overlay-demo.json` over a full-screen test card, and checks screen capture and idle CPU. Run it with `scripts/mark-overlay-lab.sh`. |
+| `IvyCore/Sources/IvyLesson/LessonEngine.swift` | ~265 | Runs one lesson: streams Claude's script, sends speech to the voice, resolves marks against text recognition, and shows each mark as its words are heard. Cancelling stops audio first. |
+| `IvyCore/Sources/IvyLesson/LessonServices.swift` | ~235 | The `/chat` script stream, the `/voice` socket, and the per-lesson timing log, which records stage times but never what was said or shown. |
+| `IvyCore/Sources/IvyLesson/LessonPrompt.swift` | ~30 | The system prompt that teaches Claude the mark format. |
+| `IvyCore/Sources/IvyLesson/ScreenTextRecognizer.swift` | ~55 | On-device text recognition with Apple Vision, warmed up at launch because the first use in a new build is very slow. |
+| `IvyCore/Sources/IvyLesson/StreamingSpeechPlayer.swift`, `AudioDevices.swift` | ~310 | Plays streamed speech and keeps the clock of what's been heard. Output delay comes from CoreAudio, because the engine's figure is wrong for devices that aren't the system default. |
+| `IvyCore/Sources/LessonLab/` | ~195 | Developer tool for drawing plan D4. Runs one real lesson about a code window, without needing Screen Recording, and reports timings and what each mark pointed at. Run it with `scripts/lesson-lab.sh`. |
 | `IvyCore/Sources/VoiceSyncLab/` | ~900 | Developer tool for drawing plan D1. Plays real speech or test clicks, draws on each word, and measures sync with the mic. Run it with `scripts/voice-sync-lab.sh`. Not part of the app. |
 | `scripts/mint-device-token.mjs` | ~70 | Issues a device token and stores it in the Keychain, without printing it. |
 

@@ -10,6 +10,9 @@
 import AVFoundation
 import Combine
 import Foundation
+import IvyCore
+import IvyLesson
+import IvyOverlay
 import ScreenCaptureKit
 import SwiftUI
 
@@ -82,6 +85,13 @@ final class CompanionManager: ObservableObject {
     /// Conversation history so Claude remembers prior exchanges within a session.
     /// Each entry is the user's transcript and Claude's response.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
+
+    /// Draws Ivy's marks over every screen. One for the app's lifetime.
+    private let markOverlay = MarkOverlayController()
+    /// Made when the key goes down, so the voice connection opens while the user is still talking.
+    private var preparedLessonEngine: LessonEngine?
+    /// The lesson currently speaking or thinking. Cancelled by the next key press.
+    private var activeLessonEngine: LessonEngine?
 
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -464,10 +474,15 @@ final class CompanionManager: ObservableObject {
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
 
-            // Cancel any in-progress response and TTS from a previous utterance
+            // Cancel any in-progress response and TTS from a previous utterance.
+            // Stopping the lesson silences its audio first, then clears its marks at once.
             currentResponseTask?.cancel()
             elevenLabsTTSClient.stopPlayback()
             clearDetectedElementLocation()
+            activeLessonEngine?.cancel()
+            activeLessonEngine = nil
+            preparedLessonEngine?.cancel()
+            preparedLessonEngine = makeLessonEngine()
 
             // Dismiss the onboarding prompt if it's showing
             if showOnboardingPrompt {
@@ -504,6 +519,7 @@ final class CompanionManager: ObservableObject {
             // Without this, a quick press-and-release drops the release event and
             // leaves the waveform overlay stuck on screen indefinitely.
             ClickyAnalytics.trackPushToTalkReleased()
+            preparedLessonEngine?.timingLog.record("key released")
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
@@ -551,150 +567,86 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - AI Response Pipeline
 
-    /// Captures a screenshot, sends it along with the transcript to Claude,
-    /// and plays the response aloud via ElevenLabs TTS. The cursor stays in
-    /// the spinner/processing state until TTS audio begins playing.
-    /// Claude's response may include a [POINT:x,y:label] tag which triggers
-    /// the buddy to fly to that element on screen.
+    /// Runs one lesson. The cursor's screen is captured, then the lesson engine streams
+    /// Claude's script, speaks it, and draws each mark as its words are heard.
     private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
         elevenLabsTTSClient.stopPlayback()
 
+        guard let lessonEngine = preparedLessonEngine ?? makeLessonEngine() else {
+            print("⚠️ No Worker device token in the Keychain. Run scripts/mint-device-token.mjs.")
+            voiceState = .idle
+            return
+        }
+        preparedLessonEngine = nil
+        activeLessonEngine = lessonEngine
+
         currentResponseTask = Task {
-            // Stay in processing (spinner) state — no streaming text displayed
             voiceState = .processing
-
             do {
-                // Capture all connected screens so the AI has full context
                 let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-
                 guard !Task.isCancelled else { return }
 
-                // Build image labels with the actual screenshot pixel dimensions
-                // so Claude's coordinate space matches the image it sees. We
-                // scale from screenshot pixels to display points ourselves.
-                let labeledImages = screenCaptures.map { capture in
-                    let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
-                    return (data: capture.imageData, label: capture.label + dimensionInfo)
+                // Marks go on the screen with the cursor, which is the one the question is
+                // about, so only that screen is sent. Other screens come later.
+                guard let cursorScreenCapture = screenCaptures.first(where: { $0.isCursorScreen }) ?? screenCaptures.first,
+                      let fullResolutionImage = cursorScreenCapture.fullResolutionImage else {
+                    print("⚠️ No screen capture to explain.")
+                    lessonEngine.cancel()
+                    voiceState = .idle
+                    return
                 }
-
-                // Pass conversation history so Claude remembers prior exchanges
-                let historyForAPI = conversationHistory.map { entry in
-                    (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
-                }
-
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
-                    images: labeledImages,
-                    systemPrompt: Self.companionVoiceResponseSystemPrompt,
-                    conversationHistory: historyForAPI,
-                    userPrompt: transcript,
-                    onTextChunk: { _ in
-                        // No streaming text display — spinner stays until TTS plays
-                    }
+                lessonEngine.timingLog.record("screen captured")
+                let lessonScreen = LessonScreen(
+                    screenshotJPEGData: cursorScreenCapture.imageData,
+                    fullResolutionImage: fullResolutionImage,
+                    geometry: CapturedScreenGeometry(
+                        imagePixelSize: CGSize(width: cursorScreenCapture.screenshotWidthInPixels, height: cursorScreenCapture.screenshotHeightInPixels),
+                        screenFrameInGlobalPoints: cursorScreenCapture.displayFrame
+                    )
                 )
 
-                guard !Task.isCancelled else { return }
-
-                // Parse the [POINT:...] tag from Claude's response
-                let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
-                let spokenText = parseResult.spokenText
-
-                // Handle element pointing if Claude returned coordinates.
-                // Switch to idle BEFORE setting the location so the triangle
-                // becomes visible and can fly to the target. Without this, the
-                // spinner hides the triangle and the flight animation is invisible.
-                let hasPointCoordinate = parseResult.coordinate != nil
-                if hasPointCoordinate {
-                    voiceState = .idle
+                lessonEngine.onFirstAudioHeard = { [weak self] in
+                    self?.voiceState = .responding
                 }
-
-                // Pick the screen capture matching Claude's screen number,
-                // falling back to the cursor screen if not specified.
-                let targetScreenCapture: CompanionScreenCapture? = {
-                    if let screenNumber = parseResult.screenNumber,
-                       screenNumber >= 1 && screenNumber <= screenCaptures.count {
-                        return screenCaptures[screenNumber - 1]
+                lessonEngine.onFinished = { [weak self, weak lessonEngine] in
+                    guard let self, let lessonEngine else { return }
+                    // Timings only. The log never holds what was said or shown.
+                    print("⏱️ \(lessonEngine.timingLog.summaryLine)")
+                    self.conversationHistory.append((userTranscript: transcript, assistantResponse: lessonEngine.spokenText))
+                    if self.conversationHistory.count > 10 {
+                        self.conversationHistory.removeFirst(self.conversationHistory.count - 10)
                     }
-                    return screenCaptures.first(where: { $0.isCursorScreen })
-                }()
-
-                if let pointCoordinate = parseResult.coordinate,
-                   let targetScreenCapture {
-                    // Claude's coordinates are in the screenshot's pixel space
-                    // (top-left origin, e.g. 1280x831). Scale to the display's
-                    // point space (e.g. 1512x982), then convert to AppKit global coords.
-                    let screenshotWidth = CGFloat(targetScreenCapture.screenshotWidthInPixels)
-                    let screenshotHeight = CGFloat(targetScreenCapture.screenshotHeightInPixels)
-                    let displayWidth = CGFloat(targetScreenCapture.displayWidthInPoints)
-                    let displayHeight = CGFloat(targetScreenCapture.displayHeightInPoints)
-                    let displayFrame = targetScreenCapture.displayFrame
-
-                    // Clamp to screenshot coordinate space
-                    let clampedX = max(0, min(pointCoordinate.x, screenshotWidth))
-                    let clampedY = max(0, min(pointCoordinate.y, screenshotHeight))
-
-                    // Scale from screenshot pixels to display points
-                    let displayLocalX = clampedX * (displayWidth / screenshotWidth)
-                    let displayLocalY = clampedY * (displayHeight / screenshotHeight)
-
-                    // Convert from top-left origin (screenshot) to bottom-left origin (AppKit)
-                    let appKitY = displayHeight - displayLocalY
-
-                    // Convert display-local coords to global screen coords
-                    let globalLocation = CGPoint(
-                        x: displayLocalX + displayFrame.origin.x,
-                        y: appKitY + displayFrame.origin.y
-                    )
-
-                    detectedElementScreenLocation = globalLocation
-                    detectedElementDisplayFrame = displayFrame
-                    ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
-                    print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
-                } else {
-                    print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
+                    self.voiceState = .idle
+                    self.scheduleTransientHideIfNeeded()
+                }
+                lessonEngine.onFailed = { [weak self, weak lessonEngine] failure in
+                    // Clear messages for each failure come with D5. For now the lesson stops,
+                    // and the log says why.
+                    print("⚠️ Lesson failed: \(failure)")
+                    if let lessonEngine { print("⏱️ \(lessonEngine.timingLog.summaryLine)") }
+                    self?.voiceState = .idle
+                    self?.scheduleTransientHideIfNeeded()
                 }
 
-                // Save this exchange to conversation history (with the point tag
-                // stripped so it doesn't confuse future context)
-                conversationHistory.append((
-                    userTranscript: transcript,
-                    assistantResponse: spokenText
-                ))
-
-                // Keep only the last 10 exchanges to avoid unbounded context growth
-                if conversationHistory.count > 10 {
-                    conversationHistory.removeFirst(conversationHistory.count - 10)
-                }
-
-                print("🧠 Conversation history: \(conversationHistory.count) exchanges")
-
-                ClickyAnalytics.trackAIResponseReceived(response: spokenText)
-
-                // Play the response via TTS. Keep the spinner (processing state)
-                // until the audio actually starts playing, then switch to responding.
-                if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    do {
-                        try await elevenLabsTTSClient.speakText(spokenText)
-                        // speakText returns after player.play() — audio is now playing
-                        voiceState = .responding
-                    } catch {
-                        ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ ElevenLabs TTS error: \(error)")
-                        speakCreditsErrorFallback()
-                    }
-                }
-            } catch is CancellationError {
-                // User spoke again — response was interrupted
+                let history = conversationHistory.map { LessonExchange(question: $0.userTranscript, spokenAnswer: $0.assistantResponse) }
+                lessonEngine.run(question: transcript, screen: lessonScreen, history: history)
             } catch {
-                ClickyAnalytics.trackResponseError(error: error.localizedDescription)
-                print("⚠️ Companion response error: \(error)")
-                speakCreditsErrorFallback()
-            }
-
-            if !Task.isCancelled {
+                print("⚠️ Screen capture failed: \(error)")
+                lessonEngine.cancel()
                 voiceState = .idle
-                scheduleTransientHideIfNeeded()
             }
+        }
+    }
+
+    /// Opens the voice connection straight away, which takes about 250 ms off the first audio.
+    private func makeLessonEngine() -> LessonEngine? {
+        guard let deviceToken = WorkerDeviceToken.readDeviceToken() else { return nil }
+        do {
+            return try LessonEngine(workerBaseURL: Self.workerBaseURL, deviceToken: deviceToken, markOverlay: markOverlay)
+        } catch {
+            print("⚠️ Couldn't start audio for the lesson: \(error)")
+            return nil
         }
     }
 

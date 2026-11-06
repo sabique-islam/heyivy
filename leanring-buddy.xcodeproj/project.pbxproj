@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		AA00BB032F6500030039DA55 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA00BB022F6500020039DA55 /* Sparkle */; };
+		DDB8D3798C5036392DD913BF /* IvyCore in Frameworks */ = {isa = PBXBuildFile; productRef = 6A4004EE4F653E60A965A4AE /* IvyCore */; };
+		6E6151188B57775BD043D719 /* IvyOverlay in Frameworks */ = {isa = PBXBuildFile; productRef = FCA4A13023A4DFC55FC96FD1 /* IvyOverlay */; };
+		BD6270568577C0757E260DCB /* IvyLesson in Frameworks */ = {isa = PBXBuildFile; productRef = B2BC7E6FF1E59D26F20461AB /* IvyLesson */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +60,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA00BB032F6500030039DA55 /* Sparkle in Frameworks */,
+				DDB8D3798C5036392DD913BF /* IvyCore in Frameworks */,
+				6E6151188B57775BD043D719 /* IvyOverlay in Frameworks */,
+				BD6270568577C0757E260DCB /* IvyLesson in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +124,9 @@
 			name = "leanring-buddy";
 			packageProductDependencies = (
 				AA00BB022F6500020039DA55 /* Sparkle */,
+				6A4004EE4F653E60A965A4AE /* IvyCore */,
+				FCA4A13023A4DFC55FC96FD1 /* IvyOverlay */,
+				B2BC7E6FF1E59D26F20461AB /* IvyLesson */,
 			);
 			productName = "leanring-buddy";
 			productReference = 28F22CBF2F56440300A0FC59 /* Clicky.app */;
@@ -203,6 +212,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AA00BB012F6500010039DA55 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				C9ED73F7A19B88EDE463F545 /* XCLocalSwiftPackageReference "IvyCore" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 28F22CC02F56440300A0FC59 /* Products */;
@@ -595,6 +605,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		C9ED73F7A19B88EDE463F545 /* XCLocalSwiftPackageReference "IvyCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = IvyCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		AA00BB012F6500010039DA55 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -611,6 +628,18 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA00BB012F6500010039DA55 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		6A4004EE4F653E60A965A4AE /* IvyCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = IvyCore;
+		};
+		FCA4A13023A4DFC55FC96FD1 /* IvyOverlay */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = IvyOverlay;
+		};
+		B2BC7E6FF1E59D26F20461AB /* IvyLesson */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = IvyLesson;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

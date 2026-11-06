@@ -7,6 +7,7 @@
 //  opens a floating panel with companion voice controls.
 //
 
+import IvyLesson
 import ServiceManagement
 import SwiftUI
 import Sparkle
@@ -41,6 +42,10 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         ClickyAnalytics.configure()
         ClickyAnalytics.trackAppOpened()
+
+        // The first text recognition in a new build can take most of a minute, so it's done
+        // now, in the background, rather than during someone's first lesson.
+        ScreenTextRecognizer.warmUpInBackground()
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         companionManager.start()

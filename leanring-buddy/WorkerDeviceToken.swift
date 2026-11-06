@@ -26,6 +26,11 @@ enum WorkerDeviceToken {
         request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
     }
 
+    /// For code that builds its own requests, like the lesson engine.
+    static func readDeviceToken() -> String? {
+        readDeviceTokenFromKeychain()
+    }
+
     private static func readDeviceTokenFromKeychain() -> String? {
         let keychainQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

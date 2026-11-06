@@ -19,6 +19,9 @@ struct CompanionScreenCapture {
     let displayFrame: CGRect
     let screenshotWidthInPixels: Int
     let screenshotHeightInPixels: Int
+    /// The cursor's screen at full resolution, for on-device text recognition, which finds
+    /// more words on it than on the smaller JPEG. Nil for other screens.
+    let fullResolutionImage: CGImage?
 }
 
 @MainActor
@@ -91,10 +94,40 @@ enum CompanionScreenCaptureUtility {
                 configuration.width = Int(CGFloat(maxDimension) * aspectRatio)
             }
 
-            let cgImage = try await SCScreenshotManager.captureImage(
-                contentFilter: filter,
-                configuration: configuration
-            )
+            // The cursor's screen is captured once at full resolution and shrunk here,
+            // so the image Claude sees and the one text recognition reads match exactly.
+            let fullResolutionImage: CGImage?
+            let cgImage: CGImage
+            if isCursorScreen {
+                let pixelsPerPoint = nsScreenByDisplayID[display.displayID]?.backingScaleFactor ?? 2
+                let fullResolutionConfiguration = SCStreamConfiguration()
+                fullResolutionConfiguration.width = Int(CGFloat(display.width) * pixelsPerPoint)
+                fullResolutionConfiguration.height = Int(CGFloat(display.height) * pixelsPerPoint)
+                let capturedFullResolutionImage = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter,
+                    configuration: fullResolutionConfiguration
+                )
+                fullResolutionImage = capturedFullResolutionImage
+                guard let shrinkingContext = CGContext(
+                    data: nil,
+                    width: configuration.width,
+                    height: configuration.height,
+                    bitsPerComponent: 8,
+                    bytesPerRow: 0,
+                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ) else { continue }
+                shrinkingContext.interpolationQuality = .high
+                shrinkingContext.draw(capturedFullResolutionImage, in: CGRect(x: 0, y: 0, width: configuration.width, height: configuration.height))
+                guard let shrunkImage = shrinkingContext.makeImage() else { continue }
+                cgImage = shrunkImage
+            } else {
+                fullResolutionImage = nil
+                cgImage = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter,
+                    configuration: configuration
+                )
+            }
 
             guard let jpegData = NSBitmapImageRep(cgImage: cgImage)
                     .representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
@@ -118,7 +151,8 @@ enum CompanionScreenCaptureUtility {
                 displayHeightInPoints: Int(displayFrame.height),
                 displayFrame: displayFrame,
                 screenshotWidthInPixels: configuration.width,
-                screenshotHeightInPixels: configuration.height
+                screenshotHeightInPixels: configuration.height,
+                fullResolutionImage: fullResolutionImage
             ))
         }
 
