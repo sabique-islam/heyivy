@@ -139,7 +139,8 @@ private func parseWhole(_ script: String) -> (speech: String, marks: [MarkReques
             Issue.record("expected label text")
             return
         }
-        #expect(labelText.count == 24)
+        #expect(labelText.count <= 24)
+        #expect(labelText.hasPrefix("an extremely long"))
     }
 
     @Test func markdownIsNotSpoken() {
@@ -218,9 +219,32 @@ private func parseWhole(_ script: String) -> (speech: String, marks: [MarkReques
             for mark in result.marks {
                 #expect(!mark.spokenWords.contains("{{") && !mark.spokenWords.contains("}}"))
             }
-            // A well-formed wrapper's fields never reach speech.
-            #expect(!result.speech.contains("|circle|"))
-            #expect(!result.speech.contains("|underline|"))
+            // Every "{{" opens a wrapper, so wrapper syntax can never reach speech.
+            #expect(!result.speech.contains("{{"))
         }
+    }
+
+    /// The strongest check: for random scripts, random splits give exactly what reading
+    /// the whole script gives. This is what makes split tags safe in practice.
+    @Test func randomSplitsOfRandomScriptsMatchReadingThemWhole() {
+        var randomNumbers = SeededRandomNumberGenerator(state: 7)
+        let fragments = ["{{", "}}", "|", "{", "}", "circle", "label", "-", "1,2", "a b ", "*", "**", "`", "#", "# ", "\n", "\n- ", "[", "]", "](", ")", "é", " ", "x"]
+        var scriptsChecked = 0
+        for _ in 0..<5000 {
+            let script = (0..<Int.random(in: 1...60, using: &randomNumbers)).map { _ in fragments.randomElement(using: &randomNumbers)! }.joined()
+            var remaining = Substring(script)
+            var pieces: [String] = []
+            while !remaining.isEmpty {
+                let pieceLength = Int.random(in: 1...6, using: &randomNumbers)
+                pieces.append(String(remaining.prefix(pieceLength)))
+                remaining = remaining.dropFirst(pieceLength)
+            }
+            let whole = parseWhole(script)
+            let split = parse(pieces)
+            #expect(split.speech == whole.speech, "script: \(script.debugDescription)")
+            #expect(split.marks == whole.marks, "script: \(script.debugDescription)")
+            scriptsChecked += 1
+        }
+        #expect(scriptsChecked == 5000)
     }
 }

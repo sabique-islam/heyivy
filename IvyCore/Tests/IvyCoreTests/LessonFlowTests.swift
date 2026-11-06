@@ -148,7 +148,7 @@ private func timeline(for spokenText: String, millisecondsPerCharacter: Double =
         }
         #expect(Set(startedLessonIDs).count == 20)
         #expect(startedLessonIDs.last == stateMachine.currentLessonID)
-        // Every lesson but the last was cancelled, apart from the first, which was idle when pressed again.
+        // Each press cancels the lesson before it, whatever phase it was in, so only the last survives.
         #expect(cancelledLessonIDs == Array(startedLessonIDs.dropLast()))
     }
 

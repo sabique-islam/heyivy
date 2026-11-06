@@ -51,6 +51,15 @@ public struct SpeechTimeline: Sendable {
     public private(set) var issues: [SpeechTimelineIssue] = []
     public private(set) var chunkTimeBases: [AlignmentTimeBase] = []
     public private(set) var spokenText = ""
+    /// One entry per aligned character, as ElevenLabs sent it, with its start time.
+    public private(set) var spokenCharacters: [String] = []
+    public private(set) var characterStartSeconds: [Double] = []
+    public private(set) var hasFinished = false
+
+    /// True once any timing went backwards, so word times can't be trusted.
+    public var hasUnreliableTimings: Bool {
+        issues.contains { if case .timingsWentBackwards = $0 { return true } else { return false } }
+    }
 
     private var characterCount = 0
     private var previousCharacterStartSeconds: Double?
@@ -88,6 +97,8 @@ public struct SpeechTimeline: Sendable {
             previousCharacterStartSeconds = startSeconds
             characterCount += 1
             spokenText += character
+            spokenCharacters.append(character)
+            characterStartSeconds.append(startSeconds)
 
             addCharacterToWords(character, startSeconds: startSeconds, endSeconds: endSeconds)
         }
@@ -113,6 +124,7 @@ public struct SpeechTimeline: Sendable {
 
     public mutating func finishStream() {
         wordIsInProgress = false
+        hasFinished = true
     }
 
     /// Records an issue if the voice spoke different text from what was sent.
