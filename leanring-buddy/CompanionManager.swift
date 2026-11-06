@@ -581,7 +581,9 @@ final class CompanionManager: ObservableObject {
         preparedLessonEngine = nil
         activeLessonEngine = lessonEngine
 
-        currentResponseTask = Task {
+        // Captured strongly by the task on purpose. The callbacks below hold them weakly,
+        // because the engine keeps its callbacks, and a strong reference would never be freed.
+        currentResponseTask = Task { [self, lessonEngine] in
             voiceState = .processing
             do {
                 let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
