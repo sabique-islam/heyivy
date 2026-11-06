@@ -106,6 +106,17 @@ private func parseWhole(_ script: String) -> (speech: String, marks: [MarkReques
         #expect(result.parser.droppedMarks == [.malformed])
     }
 
+    @Test(arguments: [197, 198, 199, 200])
+    func aWrapperClosingRightAtTheHoldLimitIsTheSameWhetherStreamedOrWhole(contentLength: Int) {
+        let fields = "this|circle|x|1,1"
+        let script = "A {{" + fields + String(repeating: " ", count: contentLength - fields.count) + "}} B"
+        let whole = parseWhole(script)
+        let oneCharacterAtATime = parse(script.map { String($0) })
+        #expect(oneCharacterAtATime.speech == whole.speech)
+        #expect(oneCharacterAtATime.marks == whole.marks)
+        #expect(whole.marks.count == (contentLength <= 200 ? 1 : 0))
+    }
+
     @Test func textHeldBackInAWrapperIsReleasedAsSoonAsItClosesNotAtTheEnd() {
         var parser = LessonScriptParser()
         _ = parser.consume("Look {{at this|circle|x|")

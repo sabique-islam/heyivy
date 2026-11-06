@@ -45,6 +45,16 @@ private func timeline(for spokenText: String, millisecondsPerCharacter: Double =
         #expect(markTimeline.update(heardContentSeconds: 1.55, speechTimeline: speechTimeline).marksToShow.map(\.payload) == ["cache"])
     }
 
+    @Test func aMarkWordInsideALongerWordIsNotMistakenForIt() {
+        // "the" sits inside "other", one character from where the parser counted, while the
+        // real "the" is four away. Only the real one starts a word.
+        var markTimeline = MarkTimeline<String>(leadSeconds: 0)
+        markTimeline.addMark(markIndex: 0, spokenCharacterOffset: 2, spokenWords: "the", payload: "the")
+        let speechTimeline = timeline(for: "other the end")
+        #expect(markTimeline.update(heardContentSeconds: 0.29, speechTimeline: speechTimeline).marksToShow.isEmpty)
+        #expect(markTimeline.update(heardContentSeconds: 0.30, speechTimeline: speechTimeline).marksToShow.map(\.payload) == ["the"])
+    }
+
     @Test func aMarkWaitsUntilItsWordHasArrivedFromTheVoiceStream() {
         var markTimeline = MarkTimeline<String>(leadSeconds: 0)
         markTimeline.addMark(markIndex: 0, spokenCharacterOffset: 30, spokenWords: "the cache", payload: "cache")
@@ -79,7 +89,8 @@ private func timeline(for spokenText: String, millisecondsPerCharacter: Double =
         speechTimeline.appendChunk(AlignedSpeechChunk(characters: ["B", "b", " ", "c", "c"], characterStartTimesMilliseconds: [150, 200, 250, 100, 350], characterDurationsMilliseconds: [50, 50, 50, 50, 50]), audioSecondsBeforeChunk: 0.15)
         var markTimeline = MarkTimeline<String>(leadSeconds: 0)
         markTimeline.addMark(markIndex: 0, spokenCharacterOffset: 6, spokenWords: "cc", payload: "cc")
-        // "cc" has a broken time, so the mark uses its sentence's start, "Bb" at 0.15 s.
+        // "cc" has a broken time of 0.1 s, so the mark uses its sentence's start, "Bb" at 0.15 s.
+        #expect(markTimeline.update(heardContentSeconds: 0.12, speechTimeline: speechTimeline).marksToShow.isEmpty)
         #expect(markTimeline.update(heardContentSeconds: 0.15, speechTimeline: speechTimeline).marksToShow.map(\.payload) == ["cc"])
     }
 }
@@ -133,6 +144,17 @@ private func timeline(for spokenText: String, millisecondsPerCharacter: Double =
         #expect(stateMachine.handle(.failed(oldLessonID, .answerFailed)) == [])
         #expect(stateMachine.handle(.speechFinished(oldLessonID)) == [])
         #expect(stateMachine.phase == .listening)
+    }
+
+    @Test func audioFromAnOldLessonDoesNotMoveANewLessonIntoSpeaking() {
+        var stateMachine = LessonStateMachine()
+        _ = stateMachine.handle(.keyPressed)
+        let oldLessonID = stateMachine.currentLessonID
+        _ = stateMachine.handle(.keyReleased(transcriptIsEmpty: false))
+        _ = stateMachine.handle(.keyPressed)
+        _ = stateMachine.handle(.keyReleased(transcriptIsEmpty: false))
+        #expect(stateMachine.handle(.firstAudioPlayed(oldLessonID)) == [])
+        #expect(stateMachine.phase == .thinking)
     }
 
     @Test func twentyRapidPressesLeaveOnlyTheLastLessonAliveAndCancelEveryOther() {
