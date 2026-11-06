@@ -140,6 +140,9 @@ Worker vars: `REVOKED_DEVICE_IDS`
 | `worker/src/transcribe.ts` | ~45 | `/transcribe-token`: short-lived AssemblyAI tokens. |
 | `worker/src/http.ts` | ~135 | The one error shape and bounded JSON reading. |
 | `worker/test/worker.test.ts` | ~560 | Security and behavior tests. Vendors are faked, so they cost nothing. |
+| `IvyCore/Sources/IvyCore/SpeechTimeline.swift` | ~150 | Turns ElevenLabs character timings into word times, checking whether each chunk counts from the stream start or its own start. |
+| `IvyCore/Sources/IvyCore/PlaybackClock.swift` | ~185 | The clock of what's actually been heard, the stall guard that pauses playback when audio runs low, and the scheduler that hands out due words. |
+| `IvyCore/Sources/VoiceSyncLab/` | ~900 | Developer tool for drawing plan D1. Plays real speech or test clicks, draws on each word, and measures sync with the mic. Run it with `scripts/voice-sync-lab.sh`. Not part of the app. |
 | `scripts/mint-device-token.mjs` | ~70 | Issues a device token and stores it in the Keychain, without printing it. |
 
 ## Build & Run
@@ -153,6 +156,8 @@ open leanring-buddy.xcodeproj
 # Known non-blocking warnings: Swift 6 concurrency warnings,
 # deprecated onChange warning in OverlayWindow.swift. Do NOT attempt to fix these.
 ```
+
+`IvyCore` is a Swift package for logic that needs no UI or permissions. Test it with `cd IvyCore && DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`. The variable is needed because Swift Testing ships with Xcode, not the Command Line Tools, and it changes nothing system-wide. This is not `xcodebuild`, and it doesn't affect the app's permissions.
 
 **Do NOT run `xcodebuild` from the terminal** — it invalidates TCC (Transparency, Consent, and Control) permissions and the app will need to re-request screen recording, accessibility, etc.
 

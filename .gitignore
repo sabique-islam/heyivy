@@ -18,3 +18,7 @@ worker/.wrangler/
 build/
 releases/
 coding-plans/
+
+# Swift package build output
+IvyCore/.build/
+IvyCore/.swiftpm/
