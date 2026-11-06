@@ -3,7 +3,7 @@ import CoreAudio
 import Foundation
 import IvyCore
 
-func currentHostSeconds() -> Double {
+public func currentHostSeconds() -> Double {
     AVAudioTime.seconds(forHostTime: mach_absolute_time())
 }
 
@@ -12,31 +12,31 @@ func currentHostSeconds() -> Double {
 /// This is the shape the app's player will take: audio is queued as it arrives, the stall
 /// guard pauses playback when the queue runs low, and the clock is fed from the engine's
 /// own render timestamps rather than from wall time.
-final class StreamingSpeechPlayer {
-    static let sampleRate = 24_000.0
+public final class StreamingSpeechPlayer {
+    public static let sampleRate = 24_000.0
 
     private let audioEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
     private let speechFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false)!
 
-    private(set) var clock = PlaybackClock(outputLatencySeconds: 0)
-    private(set) var stallGuard = PlaybackStallGuard()
-    private(set) var scheduledFrameCount: Int64 = 0
-    private(set) var streamHasEnded = false
+    public private(set) var clock = PlaybackClock(outputLatencySeconds: 0)
+    public private(set) var stallGuard = PlaybackStallGuard()
+    public private(set) var scheduledFrameCount: Int64 = 0
+    public private(set) var streamHasEnded = false
     private var lastRenderedContentSeconds = 0.0
 
     // Evidence for the questions D1 has to answer.
-    private(set) var reportedOutputLatencySeconds = 0.0
-    private(set) var engineReportedOutputLatencySeconds = 0.0
-    private(set) var outputDeviceName = AudioDevices.defaultOutputDeviceName() + " (system default)"
-    private(set) var timesPlayerRanDry = 0
-    private(set) var largestPositionJumpAcrossAPauseSeconds = 0.0
-    private(set) var pauseCount = 0
+    public private(set) var reportedOutputLatencySeconds = 0.0
+    public private(set) var engineReportedOutputLatencySeconds = 0.0
+    public private(set) var outputDeviceName = AudioDevices.defaultOutputDeviceName() + " (system default)"
+    public private(set) var timesPlayerRanDry = 0
+    public private(set) var largestPositionJumpAcrossAPauseSeconds = 0.0
+    public private(set) var pauseCount = 0
     private var renderedSecondsWhenPaused: Double?
     private var hostSecondsWhenResumed: Double?
     private var playerIsRunningDry = false
 
-    init(outputDevice: AudioDevice?) throws {
+    public init(outputDevice: AudioDevice?) throws {
         audioEngine.attach(playerNode)
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: speechFormat)
         if let outputDevice {
@@ -56,7 +56,7 @@ final class StreamingSpeechPlayer {
     private var outputDeviceID: AudioDeviceID?
 
     /// The device's own volume and mute, which this lab doesn't change.
-    var outputDeviceVolumeDescription: String {
+    public var outputDeviceVolumeDescription: String {
         guard let outputDeviceID else { return "system default device, not read" }
         var volumeAddress = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyVolumeScalar, mScope: kAudioObjectPropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
         var muteAddress = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyMute, mScope: kAudioObjectPropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
@@ -72,9 +72,9 @@ final class StreamingSpeechPlayer {
         return String(format: "volume %.2f%@", volume, isMuted != 0 ? ", muted" : "")
     }
 
-    var scheduledContentSeconds: Double { Double(scheduledFrameCount) / Self.sampleRate }
+    public var scheduledContentSeconds: Double { Double(scheduledFrameCount) / Self.sampleRate }
 
-    func enqueue(samples: [Float]) {
+    public func enqueue(samples: [Float]) {
         guard !samples.isEmpty,
               let buffer = AVAudioPCMBuffer(pcmFormat: speechFormat, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
         buffer.frameLength = AVAudioFrameCount(samples.count)
@@ -86,7 +86,7 @@ final class StreamingSpeechPlayer {
     }
 
     /// ElevenLabs sends little-endian 16-bit PCM.
-    func enqueue(pcm16Data: Data) {
+    public func enqueue(pcm16Data: Data) {
         let sampleCount = pcm16Data.count / 2
         var samples = [Float](repeating: 0, count: sampleCount)
         pcm16Data.withUnsafeBytes { rawBytes in
@@ -98,13 +98,13 @@ final class StreamingSpeechPlayer {
         enqueue(samples: samples)
     }
 
-    func markStreamEnded() {
+    public func markStreamEnded() {
         streamHasEnded = true
     }
 
     /// Call on every screen frame. Records where playback is, pauses or resumes it, and
     /// returns how far into the speech the listener will be when `displayHostSeconds` arrives.
-    func update(predictingHeardAtHostSeconds displayHostSeconds: Double) -> Double {
+    public func update(predictingHeardAtHostSeconds displayHostSeconds: Double) -> Double {
         recordRenderedPosition()
 
         let bufferedAheadSeconds = scheduledContentSeconds - lastRenderedContentSeconds
@@ -155,11 +155,11 @@ final class StreamingSpeechPlayer {
         clock.recordRenderedPosition(hostSeconds: renderHostSeconds, renderedContentSeconds: lastRenderedContentSeconds, isAdvancing: true)
     }
 
-    var hasFinishedPlaying: Bool {
+    public var hasFinishedPlaying: Bool {
         streamHasEnded && lastRenderedContentSeconds >= scheduledContentSeconds - 0.001
     }
 
-    func stop() {
+    public func stop() {
         playerNode.stop()
         audioEngine.stop()
     }

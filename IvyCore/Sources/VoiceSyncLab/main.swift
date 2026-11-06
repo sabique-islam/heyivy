@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import IvyCore
+import IvyLesson
 import QuartzCore
 
 // VoiceSyncLab: checks that marks land on their words (drawing plan, D1).

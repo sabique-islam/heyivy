@@ -2,6 +2,7 @@ import AVFoundation
 import CoreAudio
 import Foundation
 import IvyCore
+import IvyLesson
 
 /// Measures sync without anyone watching: short clicks are played as if they were words,
 /// the screen flashes when the clock says each click is heard, and the microphone records

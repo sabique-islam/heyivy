@@ -3,17 +3,17 @@ import Foundation
 
 /// Finds audio devices by kind, so a test can use the built-in speakers or a Bluetooth
 /// device without changing the Mac's default output.
-struct AudioDevice {
-    let deviceID: AudioDeviceID
-    let name: String
-    let isBuiltIn: Bool
-    let isBluetooth: Bool
-    let outputChannelCount: Int
-    let inputChannelCount: Int
+public struct AudioDevice {
+    public let deviceID: AudioDeviceID
+    public let name: String
+    public let isBuiltIn: Bool
+    public let isBluetooth: Bool
+    public let outputChannelCount: Int
+    public let inputChannelCount: Int
 }
 
-enum AudioDevices {
-    static func allDevices() -> [AudioDevice] {
+public enum AudioDevices {
+    public static func allDevices() -> [AudioDevice] {
         var devicesAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -38,7 +38,7 @@ enum AudioDevices {
     }
 
     /// "speakers" and "bluetooth" pick a device by kind. Anything else means the system default.
-    static func outputDevice(named choice: String) -> AudioDevice? {
+    public static func outputDevice(named choice: String) -> AudioDevice? {
         let outputDevices = allDevices().filter { $0.outputChannelCount > 0 }
         switch choice {
         case "speakers": return outputDevices.first { $0.isBuiltIn }
@@ -47,7 +47,7 @@ enum AudioDevices {
         }
     }
 
-    static func defaultOutputDeviceName() -> String {
+    public static func defaultOutputDeviceName() -> String {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -59,7 +59,7 @@ enum AudioDevices {
         return readName(deviceID)
     }
 
-    static func defaultOutputDeviceID() -> AudioDeviceID? {
+    public static func defaultOutputDeviceID() -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -75,7 +75,7 @@ enum AudioDevices {
     /// added up from what the device itself reports: its own delay, its safety margin, the
     /// I/O buffer, and the stream's delay. AVAudioEngine's presentationLatency gave 1 ms for
     /// a device that wasn't the system default, so it can't be relied on here.
-    static func latencySeconds(of deviceID: AudioDeviceID, isInput: Bool) -> Double {
+    public static func latencySeconds(of deviceID: AudioDeviceID, isInput: Bool) -> Double {
         let scope = isInput ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput
         func readFrames(_ selector: AudioObjectPropertySelector, _ objectID: AudioObjectID) -> UInt32 {
             var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
@@ -111,7 +111,7 @@ enum AudioDevices {
         return Double(totalFrames) / deviceSampleRate
     }
 
-    static func builtInMicrophone() -> AudioDevice? {
+    public static func builtInMicrophone() -> AudioDevice? {
         allDevices().first { $0.isBuiltIn && $0.inputChannelCount > 0 }
     }
 
