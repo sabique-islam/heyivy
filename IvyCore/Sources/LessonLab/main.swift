@@ -69,7 +69,6 @@ final class LabController: NSObject, NSApplicationDelegate {
     private var result: [String: Any] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        ScreenTextRecognizer.warmUpInBackground()
         guard let screen = NSScreen.main else { return finish(withError: "No screen.") }
 
         let codeView = NSTextView(frame: CGRect(x: 0, y: 0, width: 900, height: 360))
@@ -90,10 +89,21 @@ final class LabController: NSObject, NSApplicationDelegate {
             return finish(withError: "No device token in the Keychain. Run scripts/mint-device-token.mjs.")
         }
 
-        // Give the window a moment to draw, then treat that moment as the key being released.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+        // Each lab build is a new app to text recognition, and its first use can take most of a
+        // minute. The app warms it at launch, so the lab waits for that here and reports it.
+        Task.detached(priority: .userInitiated) {
+            let warmUpSeconds = ScreenTextRecognizer.warmUp()
+            await MainActor.run {
+                self.result["textRecognitionWarmUpMs"] = Int((warmUpSeconds * 1000).rounded())
+                self.startLesson(on: screen, deviceToken: deviceToken)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 150) { [weak self] in self?.finish(withError: "Timed out.") }
+    }
+
+    private func startLesson(on screen: NSScreen, deviceToken: String) {
+        do {
             let timingLog = LessonTimingLog()
-            do {
                 let engine = try LessonEngine(workerBaseURL: "https://secrets.worker.ivy.ivyx.me", deviceToken: deviceToken, markOverlay: self.markOverlay, timingLog: timingLog)
                 self.lessonEngine = engine
                 guard let lessonScreen = self.renderScreenshot(of: screen) else { return self.finish(withError: "Couldn't draw the screenshot.") }
@@ -103,11 +113,9 @@ final class LabController: NSObject, NSApplicationDelegate {
                 }
                 engine.onFailed = { [weak self] failure in self?.finish(withError: "Lesson failed: \(failure)") }
                 engine.run(question: self.options.question, screen: lessonScreen, history: [])
-            } catch {
-                self.finish(withError: "Couldn't start audio: \(error.localizedDescription)")
-            }
+        } catch {
+            self.finish(withError: "Couldn't start audio: \(error.localizedDescription)")
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in self?.finish(withError: "Timed out after 60 seconds.") }
     }
 
     /// A full-screen image with the code window where it really is, like a capture, at full

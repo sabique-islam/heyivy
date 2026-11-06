@@ -132,7 +132,10 @@ public final class LessonEngine {
                 spokenText += speechText
                 voiceStream.send(speechText: speechText)
             case .mark(let markRequest):
-                if recognizedWords == nil {
+                // Only text marks need text recognition. Others are placed by position.
+                let needsTextRecognition: Bool
+                if case .visibleText = markRequest.target { needsTextRecognition = true } else { needsTextRecognition = false }
+                if needsTextRecognition && recognizedWords == nil {
                     marksWaitingForTextRecognition.append(markRequest)
                 } else {
                     resolve(markRequest)

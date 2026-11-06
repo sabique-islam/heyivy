@@ -9,11 +9,18 @@ public enum ScreenTextRecognizer {
     /// The first recognition in a new build took about 52 seconds in testing, and later ones
     /// about a quarter of a second. Calling this at launch takes that hit before any lesson.
     public static func warmUpInBackground() {
-        Task.detached(priority: .utility) {
-            let warmUpContext = CGContext(data: nil, width: 64, height: 32, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
-            guard let warmUpImage = warmUpContext?.makeImage() else { return }
+        Task.detached(priority: .utility) { warmUp() }
+    }
+
+    /// Runs one tiny recognition and returns how long it took, in seconds.
+    @discardableResult
+    public static func warmUp() -> Double {
+        let startSeconds = ProcessInfo.processInfo.systemUptime
+        let warmUpContext = CGContext(data: nil, width: 64, height: 32, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
+        if let warmUpImage = warmUpContext?.makeImage() {
             _ = try? recognizeWords(in: warmUpImage, reportedInPixelSize: CGSize(width: 64, height: 32))
         }
+        return ProcessInfo.processInfo.systemUptime - startSeconds
     }
 
     /// Recognizes text on `image`, and reports each word's box in a screenshot of
