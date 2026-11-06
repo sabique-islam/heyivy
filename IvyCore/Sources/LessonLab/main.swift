@@ -161,6 +161,14 @@ final class LabController: NSObject, NSApplicationDelegate {
             result["timingsMs"] = lessonEngine.timingLog.stageTimesMilliseconds.map { ["stage": $0.stage, "ms": $0.milliseconds] }
             result["marks"] = lessonEngine.markOutcomes.map { markOutcome -> [String: Any] in
                 var markReport: [String: Any] = ["mark": markOutcome.markIndex, "kind": markOutcome.kind.rawValue, "outcome": markOutcome.outcome]
+                // The lab's screen is its own code, so it can say what each mark pointed at.
+                if let markRequest = lessonEngine.requestedMarks.first(where: { $0.markIndex == markOutcome.markIndex }) {
+                    markReport["spokenWords"] = markRequest.spokenWords
+                    markReport["target"] = "\(markRequest.target)"
+                }
+                if let box = lessonEngine.resolvedBoxesInImagePixels[markOutcome.markIndex] {
+                    markReport["boxInScreenshotPixels"] = "\(Int(box.minX)),\(Int(box.minY)) \(Int(box.width))x\(Int(box.height))"
+                }
                 if let shownAt = markOutcome.shownAtHeardSeconds, let wordStart = markOutcome.wordStartSeconds {
                     // Negative means the mark appeared before its word, as the lead intends.
                     markReport["shownMsRelativeToItsWord"] = Int(((shownAt - wordStart) * 1000).rounded())

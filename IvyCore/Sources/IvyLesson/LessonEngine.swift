@@ -46,6 +46,10 @@ public final class LessonEngine {
 
     public private(set) var spokenText = ""
     public private(set) var markOutcomes: [MarkOutcome] = []
+    /// Every mark Claude asked for, with the screen text it named. For labs checking their
+    /// own screens. The app must not log these, since they can hold what's on the user's screen.
+    public private(set) var requestedMarks: [MarkRequest] = []
+    public private(set) var resolvedBoxesInImagePixels: [Int: CGRect] = [:]
     public let timingLog: LessonTimingLog
 
     private let workerBaseURL: String
@@ -132,6 +136,7 @@ public final class LessonEngine {
                 spokenText += speechText
                 voiceStream.send(speechText: speechText)
             case .mark(let markRequest):
+                requestedMarks.append(markRequest)
                 // Only text marks need text recognition. Others are placed by position.
                 let needsTextRecognition: Bool
                 if case .visibleText = markRequest.target { needsTextRecognition = true } else { needsTextRecognition = false }
@@ -179,6 +184,7 @@ public final class LessonEngine {
             return
         }
         markOutcomes.append(outcome)
+        resolvedBoxesInImagePixels[markRequest.markIndex] = targetBox
         var labelText: String?
         if case .labelText(let text) = markRequest.target { labelText = text }
         markTimeline.addMark(
