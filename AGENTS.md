@@ -146,6 +146,9 @@ Worker vars: `REVOKED_DEVICE_IDS`
 | `IvyCore/Sources/IvyCore/TargetResolver.swift` | ~220 | Finds each mark's target among on-device text recognition results, dropping it when text and position disagree, and converts screenshot pixels to screen points. |
 | `IvyCore/Sources/IvyCore/LessonFlow.swift` | ~275 | Times marks to their words, with a limit of 5 on screen, and the lesson state machine with IDs, interrupts, and the failure rules. |
 | `IvyCore/Tests/IvyCoreTests/` | ~870 | 87 tests, including every split point, random splits, and fuzzed input for the parser. |
+| `IvyCore/Sources/IvyOverlay/MarkGeometry.swift` | ~150 | Where each mark kind goes around its target so it never covers it, and the mark style, which is a bright stroke with a dark outline so marks are readable on any background. |
+| `IvyCore/Sources/IvyOverlay/MarkOverlay.swift` | ~270 | Mark layers, the click-through overlay window for each screen, and `MarkOverlayController`, which shows, fades, and clears marks. Its windows exist only while they hold marks. |
+| `IvyCore/Sources/MarkOverlayLab/` | ~300 | Developer tool for drawing plan D3. Draws marks from `IvyCore/Examples/overlay-demo.json` over a full-screen test card, and checks screen capture and idle CPU. Run it with `scripts/mark-overlay-lab.sh`. |
 | `IvyCore/Sources/VoiceSyncLab/` | ~900 | Developer tool for drawing plan D1. Plays real speech or test clicks, draws on each word, and measures sync with the mic. Run it with `scripts/voice-sync-lab.sh`. Not part of the app. |
 | `scripts/mint-device-token.mjs` | ~70 | Issues a device token and stores it in the Keychain, without printing it. |
 
