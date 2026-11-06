@@ -43,7 +43,15 @@ Fill in `.env`. The app talks to the live Worker at `https://secrets.worker.ivy.
 scripts/mint-device-token.mjs
 ```
 
-The token only works if `DEVICE_TOKEN_SIGNING_KEY` in your `.env` matches the Worker's. The first time the app reads it, macOS asks for permission. Choose Always Allow.
+The token only works if `DEVICE_TOKEN_SIGNING_KEY` in your `.env` matches the Worker's.
+
+The app can't read the token unless it's on the Keychain item's access list. Without that, every request goes out with no token and the Worker refuses it, which looks like push-to-talk cutting out at once. After your first Xcode build, issue the token again with the app trusted:
+
+```bash
+scripts/mint-device-token.mjs --trust-app ~/Library/Developer/Xcode/DerivedData/leanring-buddy-*/Build/Products/Debug/Clicky.app
+```
+
+The app is trusted by its signature, so this holds across rebuilds while you sign with the same team.
 
 To work on the Worker itself:
 

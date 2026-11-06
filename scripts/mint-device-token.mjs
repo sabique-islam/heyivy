@@ -5,9 +5,11 @@
 //   scripts/mint-device-token.mjs                      Store a token for this Mac's app
 //   scripts/mint-device-token.mjs --days 30            Choose how long it lasts (default 180)
 //   scripts/mint-device-token.mjs --output-file PATH   Write it to a new private file instead
+//   scripts/mint-device-token.mjs --trust-app PATH     Let this app read the token without asking.
+//                                                      Pass the built Clicky.app, signed with your team.
 import { spawnSync } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -20,6 +22,7 @@ const { values: options } = parseArgs({
   options: {
     days: { type: "string", default: "180" },
     "output-file": { type: "string" },
+    "trust-app": { type: "string" },
   },
 });
 
@@ -50,8 +53,22 @@ if (options["output-file"]) {
   // flag "wx" refuses to overwrite, and mode 600 keeps the file private to this user.
   writeFileSync(options["output-file"], deviceToken, { mode: 0o600, flag: "wx" });
 } else {
+  // A Keychain item made by the `security` tool only lets that tool read it silently, so any
+  // app that should read it has to be on its access list. That list is set when the item is
+  // made, so an old item is removed first. The app is trusted by its code signature, which
+  // stays the same across rebuilds signed with the same team.
+  const trustedAppPaths = ["/usr/bin/security"];
+  if (options["trust-app"]) {
+    if (!existsSync(options["trust-app"])) {
+      console.error(`No app at ${options["trust-app"]}.`);
+      process.exit(1);
+    }
+    trustedAppPaths.push(options["trust-app"]);
+  }
+  spawnSync("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT], { stdio: "ignore" });
+  const trustedAppArguments = trustedAppPaths.map((appPath) => `-T "${appPath}"`).join(" ");
   // Sent over stdin, because command-line arguments are visible to other processes.
-  const keychainCommand = `add-generic-password -U -s ${KEYCHAIN_SERVICE} -a ${KEYCHAIN_ACCOUNT} -w ${deviceToken}\n`;
+  const keychainCommand = `add-generic-password -s ${KEYCHAIN_SERVICE} -a ${KEYCHAIN_ACCOUNT} ${trustedAppArguments} -w ${deviceToken}\n`;
   const keychainResult = spawnSync("security", ["-i"], { input: keychainCommand, stdio: ["pipe", "ignore", "pipe"] });
   if (keychainResult.status !== 0) {
     console.error("Couldn't save the token to the Keychain.");

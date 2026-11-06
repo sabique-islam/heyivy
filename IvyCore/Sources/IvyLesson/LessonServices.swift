@@ -113,7 +113,11 @@ public final class VoiceStream {
     /// Called if the connection ends before the voice finished, with no retry.
     public var onFailed: ((LessonFailure) -> Void)?
 
-    private let speechPlayer: StreamingSpeechPlayer
+    /// Attached once the lesson runs. Starting audio output while the mic is starting
+    /// breaks the mic on Bluetooth headsets, which switch modes when the mic turns on.
+    private var speechPlayer: StreamingSpeechPlayer?
+    /// Audio that arrived before the player was attached, played as soon as it is.
+    private var audioWaitingForPlayer: [Data] = []
     private let webSocketTask: URLSessionWebSocketTask
     private var receivedAudioSeconds = 0.0
     private var isClosedOnPurpose = false
@@ -121,12 +125,18 @@ public final class VoiceStream {
     // The Worker closes with these when a device hits its limits.
     private static let spendLimitCloseCode = 4429
 
-    public init(workerBaseURL: String, deviceToken: String, speechPlayer: StreamingSpeechPlayer) {
-        self.speechPlayer = speechPlayer
+    public init(workerBaseURL: String, deviceToken: String) {
         var request = URLRequest(url: URL(string: "\(workerBaseURL.replacingOccurrences(of: "https://", with: "wss://"))/voice")!)
         request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
         webSocketTask = URLSession.shared.webSocketTask(with: request)
         webSocketTask.maximumMessageSize = 16 * 1024 * 1024
+    }
+
+    public func attach(speechPlayer: StreamingSpeechPlayer) {
+        self.speechPlayer = speechPlayer
+        for waitingAudio in audioWaitingForPlayer { speechPlayer.enqueue(pcm16Data: waitingAudio) }
+        audioWaitingForPlayer = []
+        if hasReceivedFinalMessage { speechPlayer.markStreamEnded() }
     }
 
     /// Open this when the key goes down. Connecting takes about 250 ms, which is then off
@@ -176,7 +186,7 @@ public final class VoiceStream {
                     self.receiveNextMessage()
                 case .failure:
                     guard !self.isClosedOnPurpose, !self.hasReceivedFinalMessage else { return }
-                    self.speechPlayer.markStreamEnded()
+                    self.speechPlayer?.markStreamEnded()
                     let failure: LessonFailure = self.webSocketTask.closeCode.rawValue == Self.spendLimitCloseCode ? .spendLimitReached : .voiceFailed
                     self.onFailed?(failure)
                 }
@@ -189,7 +199,11 @@ public final class VoiceStream {
         if let audioBase64 = message["audio"] as? String, let audioData = Data(base64Encoded: audioBase64), !audioData.isEmpty {
             if receivedAudioSeconds == 0 { onFirstAudioReceived?() }
             audioSecondsInThisMessage = Double(audioData.count / 2) / StreamingSpeechPlayer.sampleRate
-            speechPlayer.enqueue(pcm16Data: audioData)
+            if let speechPlayer {
+                speechPlayer.enqueue(pcm16Data: audioData)
+            } else {
+                audioWaitingForPlayer.append(audioData)
+            }
         }
         // The alignment describes this message's own audio, so it comes after the audio before it.
         if let alignment = message["alignment"] as? [String: Any],
@@ -205,7 +219,7 @@ public final class VoiceStream {
         if message["isFinal"] as? Bool == true {
             hasReceivedFinalMessage = true
             speechTimeline.finishStream()
-            speechPlayer.markStreamEnded()
+            speechPlayer?.markStreamEnded()
             close()
         }
     }

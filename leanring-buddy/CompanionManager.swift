@@ -644,12 +644,7 @@ final class CompanionManager: ObservableObject {
     /// Opens the voice connection straight away, which takes about 250 ms off the first audio.
     private func makeLessonEngine() -> LessonEngine? {
         guard let deviceToken = WorkerDeviceToken.readDeviceToken() else { return nil }
-        do {
-            return try LessonEngine(workerBaseURL: Self.workerBaseURL, deviceToken: deviceToken, markOverlay: markOverlay)
-        } catch {
-            print("⚠️ Couldn't start audio for the lesson: \(error)")
-            return nil
-        }
+        return LessonEngine(workerBaseURL: Self.workerBaseURL, deviceToken: deviceToken, markOverlay: markOverlay)
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),

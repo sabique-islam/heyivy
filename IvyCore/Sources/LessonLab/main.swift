@@ -102,20 +102,16 @@ final class LabController: NSObject, NSApplicationDelegate {
     }
 
     private func startLesson(on screen: NSScreen, deviceToken: String) {
-        do {
-            let timingLog = LessonTimingLog()
-                let engine = try LessonEngine(workerBaseURL: "https://secrets.worker.ivy.ivyx.me", deviceToken: deviceToken, markOverlay: self.markOverlay, timingLog: timingLog)
-                self.lessonEngine = engine
-                guard let lessonScreen = self.renderScreenshot(of: screen) else { return self.finish(withError: "Couldn't draw the screenshot.") }
-                timingLog.record("screen captured")
-                engine.onFinished = { [weak self] in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self?.finish(withError: nil) }
-                }
-                engine.onFailed = { [weak self] failure in self?.finish(withError: "Lesson failed: \(failure)") }
-                engine.run(question: self.options.question, screen: lessonScreen, history: [])
-        } catch {
-            self.finish(withError: "Couldn't start audio: \(error.localizedDescription)")
+        let timingLog = LessonTimingLog()
+        let engine = LessonEngine(workerBaseURL: "https://secrets.worker.ivy.ivyx.me", deviceToken: deviceToken, markOverlay: markOverlay, timingLog: timingLog)
+        lessonEngine = engine
+        guard let lessonScreen = renderScreenshot(of: screen) else { return finish(withError: "Couldn't draw the screenshot.") }
+        timingLog.record("screen captured")
+        engine.onFinished = { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self?.finish(withError: nil) }
         }
+        engine.onFailed = { [weak self] failure in self?.finish(withError: "Lesson failed: \(failure)") }
+        engine.run(question: options.question, screen: lessonScreen, history: [])
     }
 
     /// A full-screen image with the code window where it really is, like a capture, at full

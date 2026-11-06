@@ -55,7 +55,9 @@ public final class LessonEngine {
     private let workerBaseURL: String
     private let deviceToken: String
     private let markOverlay: MarkOverlayController
-    private let speechPlayer: StreamingSpeechPlayer
+    private let outputDevice: AudioDevice?
+    /// Made when the lesson runs, not when the key goes down. See `VoiceStream.attach`.
+    private var speechPlayer: StreamingSpeechPlayer?
     private let voiceStream: VoiceStream
     private var scriptParser = LessonScriptParser()
     private var markTimeline = MarkTimeline<MarkDrawing>(leadSeconds: 0.08)
@@ -71,13 +73,14 @@ public final class LessonEngine {
     private var isCancelled = false
 
     /// Call when the key goes down, so the voice connection is ready by the time the script is.
-    public init(workerBaseURL: String, deviceToken: String, markOverlay: MarkOverlayController, outputDevice: AudioDevice? = nil, timingLog: LessonTimingLog = LessonTimingLog()) throws {
+    /// It only opens the network connection. Audio output starts in `run`, once the mic is done.
+    public init(workerBaseURL: String, deviceToken: String, markOverlay: MarkOverlayController, outputDevice: AudioDevice? = nil, timingLog: LessonTimingLog = LessonTimingLog()) {
         self.workerBaseURL = workerBaseURL
         self.deviceToken = deviceToken
         self.markOverlay = markOverlay
+        self.outputDevice = outputDevice
         self.timingLog = timingLog
-        speechPlayer = try StreamingSpeechPlayer(outputDevice: outputDevice)
-        voiceStream = VoiceStream(workerBaseURL: workerBaseURL, deviceToken: deviceToken, speechPlayer: speechPlayer)
+        voiceStream = VoiceStream(workerBaseURL: workerBaseURL, deviceToken: deviceToken)
         voiceStream.onFirstAudioReceived = { [weak self] in self?.timingLog.record("first audio received") }
         voiceStream.onFailed = { [weak self] failure in self?.fail(with: failure) }
         voiceStream.open()
@@ -85,6 +88,7 @@ public final class LessonEngine {
 
     public func run(question: String, screen: LessonScreen, history: [LessonExchange]) {
         self.screen = screen
+        startSpeechPlayer(attemptsRemaining: Self.speechPlayerStartAttempts)
         startTextRecognition(on: screen)
         startDisplayLink()
 
@@ -118,10 +122,34 @@ public final class LessonEngine {
         }
     }
 
+    // A Bluetooth headset takes a moment to switch back from headset mode after the mic stops,
+    // and audio output can't start until it has. Claude takes about 2 seconds to start
+    // speaking, so a few short retries cost nothing, and early audio waits in the voice stream.
+    private static let speechPlayerStartAttempts = 6
+    private static let speechPlayerRetryDelaySeconds = 0.3
+
+    private func startSpeechPlayer(attemptsRemaining: Int) {
+        guard !isCancelled, !hasFinished else { return }
+        do {
+            let newSpeechPlayer = try StreamingSpeechPlayer(outputDevice: outputDevice)
+            speechPlayer = newSpeechPlayer
+            voiceStream.attach(speechPlayer: newSpeechPlayer)
+            timingLog.record("audio output started")
+        } catch {
+            guard attemptsRemaining > 1 else {
+                fail(with: .voiceFailed)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.speechPlayerRetryDelaySeconds) { [weak self] in
+                self?.startSpeechPlayer(attemptsRemaining: attemptsRemaining - 1)
+            }
+        }
+    }
+
     /// Stops speech at once, then everything else. Marks clear immediately.
     public func cancel() {
         isCancelled = true
-        speechPlayer.stop()
+        speechPlayer?.stop()
         voiceStream.close()
         scriptTask?.cancel()
         stopDisplayLink()
@@ -200,6 +228,7 @@ public final class LessonEngine {
 
     private func screenWillRefresh(displayHostSeconds: Double) {
         guard !isCancelled else { return }
+        guard let speechPlayer else { return }
         let heardContentSeconds = speechPlayer.update(predictingHeardAtHostSeconds: displayHostSeconds)
         if heardContentSeconds > 0 && !hasHeardFirstAudio {
             hasHeardFirstAudio = true
