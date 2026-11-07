@@ -18,6 +18,8 @@ struct LabOptions {
     var mode = "clicks"
     var outputChoice = "default"
     var forceStallInSpeechMode = false
+    /// Seconds into the speech at which to run the output-device-change recovery, or nil.
+    var simulateDeviceChangeAtSeconds: Double?
     var resultPath = FileManager.default.temporaryDirectory.appendingPathComponent("voice-sync-lab-result.json").path
 
     init(arguments: [String]) {
@@ -30,6 +32,7 @@ struct LabOptions {
             case "--output": outputChoice = nextValue; argumentIndex += 1
             case "--result": resultPath = nextValue; argumentIndex += 1
             case "--stall": forceStallInSpeechMode = true
+            case "--simulate-device-change": simulateDeviceChangeAtSeconds = Double(nextValue); argumentIndex += 1
             default: break
             }
             argumentIndex += 1
@@ -78,6 +81,9 @@ final class LabController: NSObject, NSApplicationDelegate {
     private var sentWordRanges: [NSRange] = []
     private var cuedWordCount = 0
     private var voiceCloseReason: String?
+    private var heardSecondsBeforeDeviceChange: Double?
+    private var deviceChangeHostSeconds: Double?
+    private var heardSecondsHalfASecondAfterDeviceChange: Double?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         result["mode"] = options.mode
@@ -95,7 +101,31 @@ final class LabController: NSObject, NSApplicationDelegate {
             return
         }
 
-        if options.mode == "devices" {
+        if options.mode == "mic-check" {
+            // Records for 4 seconds exactly as push-to-talk does, then reports what arrived.
+            AVCaptureDevice.requestAccess(for: .audio) { microphoneAllowed in
+                DispatchQueue.main.async {
+                    guard microphoneAllowed else { return self.finish(withError: "Microphone access was denied.") }
+                    let microphoneCapture = MicrophoneCapture()
+                    do {
+                        try microphoneCapture.start { _ in }
+                    } catch {
+                        return self.finish(withError: "Couldn't start the microphone: \(error)")
+                    }
+                    self.result["defaultInputDevice"] = AudioDevices.defaultInputDeviceID().flatMap { defaultID in AudioDevices.allDevices().first { $0.deviceID == defaultID }?.name } ?? "none"
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                        self.result["microphoneUsed"] = microphoneCapture.microphoneName
+                        self.result["buffersCaptured"] = microphoneCapture.capturedBufferCount
+                        self.result["peakLevel"] = (Double(microphoneCapture.peakLevel) * 1000).rounded() / 1000
+                        self.result["restartsAfterDeviceChange"] = microphoneCapture.restartsAfterDeviceChange
+                        self.result["deviceChangesIgnoredWhileRunning"] = microphoneCapture.deviceChangesIgnoredWhileRunning
+                        microphoneCapture.stop()
+                        self.finish(withError: nil)
+                    }
+                }
+            }
+            return
+        } else if options.mode == "devices" {
             result["devices"] = AudioDevices.allDevices().map { device -> [String: Any] in
                 var description: [String: Any] = ["name": device.name, "builtIn": device.isBuiltIn, "bluetooth": device.isBluetooth]
                 if device.outputChannelCount > 0 { description["outputLatencyMs"] = Int((AudioDevices.latencySeconds(of: device.deviceID, isInput: false) * 1000).rounded()) }
@@ -387,6 +417,17 @@ final class LabController: NSObject, NSApplicationDelegate {
             firstAudioHeardHostSeconds = displayHostSeconds
         }
 
+        // Runs the same recovery a real device change triggers, then checks speech carried on
+        // from where it was heard rather than restarting or skipping ahead.
+        if let simulateAtSeconds = options.simulateDeviceChangeAtSeconds, heardSecondsBeforeDeviceChange == nil, heardContentSeconds >= simulateAtSeconds {
+            heardSecondsBeforeDeviceChange = heardContentSeconds
+            deviceChangeHostSeconds = currentHostSeconds()
+            speechPlayer.continueOnTheNewOutputDevice()
+        }
+        if let deviceChangeHostSeconds, heardSecondsHalfASecondAfterDeviceChange == nil, currentHostSeconds() - deviceChangeHostSeconds >= 0.5 {
+            heardSecondsHalfASecondAfterDeviceChange = heardContentSeconds
+        }
+
         for dueWord in wordScheduler.takeDueWords(from: speechTimeline.words, heardContentSeconds: heardContentSeconds) {
             cuedWordCount += 1
             moveDot(toSentWordAt: dueWord.wordIndex)
@@ -440,6 +481,11 @@ final class LabController: NSObject, NSApplicationDelegate {
         result["timesPlayerRanDry"] = speechPlayer.timesPlayerRanDry
         result["largestPositionJumpAcrossAPauseMs"] = Int((speechPlayer.largestPositionJumpAcrossAPauseSeconds * 1000).rounded())
         result["voiceCloseReason"] = voiceCloseReason ?? "closed normally"
+        if let heardSecondsBeforeDeviceChange {
+            result["deviceChangesRecovered"] = speechPlayer.outputDeviceChangesRecovered
+            result["heardSecondsAtDeviceChange"] = (heardSecondsBeforeDeviceChange * 1000).rounded() / 1000
+            result["heardSecondsHalfASecondLater"] = heardSecondsHalfASecondAfterDeviceChange.map { ($0 * 1000).rounded() / 1000 } ?? NSNull()
+        }
         finish(withError: nil)
     }
 

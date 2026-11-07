@@ -111,6 +111,36 @@ public enum AudioDevices {
         return Double(totalFrames) / deviceSampleRate
     }
 
+    public static func defaultInputDeviceID() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID: AudioDeviceID = 0
+        var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &deviceID) == noErr, deviceID != 0 else { return nil }
+        return deviceID
+    }
+
+    /// The mic to record from. Opening a Bluetooth headset's mic switches the headset from its
+    /// music mode into a lower-quality call mode, which also rebuilds the audio devices under
+    /// every app that's playing. So when the default mic is a Bluetooth headset and the Mac has
+    /// its own mic, this picks the Mac's mic, and the headset keeps playing in full quality.
+    /// Any other mic the person chose, like a USB or wired one, is used as it is.
+    public static func microphoneThatKeepsHeadsetsInMusicMode() -> AudioDeviceID? {
+        guard let defaultInputDeviceID = defaultInputDeviceID() else { return nil }
+        let defaultInputIsBluetooth = allDevices().first { $0.deviceID == defaultInputDeviceID }?.isBluetooth ?? false
+        if defaultInputIsBluetooth, let builtInMicrophone = builtInMicrophone() {
+            return builtInMicrophone.deviceID
+        }
+        return defaultInputDeviceID
+    }
+
+    public static func deviceStillExists(_ deviceID: AudioDeviceID) -> Bool {
+        allDevices().contains { $0.deviceID == deviceID }
+    }
+
     public static func builtInMicrophone() -> AudioDevice? {
         allDevices().first { $0.isBuiltIn && $0.inputChannelCount > 0 }
     }

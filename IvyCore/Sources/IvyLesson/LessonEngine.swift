@@ -132,6 +132,7 @@ public final class LessonEngine {
         guard !isCancelled, !hasFinished else { return }
         do {
             let newSpeechPlayer = try StreamingSpeechPlayer(outputDevice: outputDevice)
+            newSpeechPlayer.onPlaybackFailed = { [weak self] in self?.fail(with: .voiceFailed) }
             speechPlayer = newSpeechPlayer
             voiceStream.attach(speechPlayer: newSpeechPlayer)
             timingLog.record("audio output started")
