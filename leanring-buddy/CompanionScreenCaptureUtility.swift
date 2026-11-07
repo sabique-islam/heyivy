@@ -22,6 +22,9 @@ struct CompanionScreenCapture {
     /// The cursor's screen at full resolution, for on-device text recognition, which finds
     /// more words on it than on the smaller JPEG. Nil for other screens.
     let fullResolutionImage: CGImage?
+    /// Where the pointer was, in AppKit screen points. It's in the capture, so marks ignore
+    /// that spot when watching for the screen to change.
+    let pointerLocationAtCapture: CGPoint
 }
 
 @MainActor
@@ -152,7 +155,8 @@ enum CompanionScreenCaptureUtility {
                 displayFrame: displayFrame,
                 screenshotWidthInPixels: configuration.width,
                 screenshotHeightInPixels: configuration.height,
-                fullResolutionImage: fullResolutionImage
+                fullResolutionImage: fullResolutionImage,
+                pointerLocationAtCapture: mouseLocation
             ))
         }
 

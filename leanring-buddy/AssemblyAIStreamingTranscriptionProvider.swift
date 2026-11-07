@@ -10,6 +10,9 @@ import Foundation
 
 struct AssemblyAIStreamingTranscriptionProviderError: LocalizedError {
     let message: String
+    /// Set when the Worker refused the token request, so the app can say why.
+    var workerStatusCode: Int? = nil
+    var workerErrorBody: String = ""
 
     var errorDescription: String? {
         message
@@ -71,7 +74,9 @@ final class AssemblyAIStreamingTranscriptionProvider: BuddyTranscriptionProvider
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
             let body = String(data: data, encoding: .utf8) ?? "unknown"
             throw AssemblyAIStreamingTranscriptionProviderError(
-                message: "Failed to fetch AssemblyAI token (HTTP \(statusCode)): \(body)"
+                message: "Failed to fetch AssemblyAI token (HTTP \(statusCode)): \(body)",
+                workerStatusCode: statusCode,
+                workerErrorBody: body
             )
         }
 

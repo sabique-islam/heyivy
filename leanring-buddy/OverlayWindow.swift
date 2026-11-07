@@ -78,6 +78,13 @@ struct SizePreferenceKey: PreferenceKey {
     }
 }
 
+struct LessonBubbleSizePreferenceKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
+
 struct NavigationBubbleSizePreferenceKey: PreferenceKey {
     static var defaultValue: CGSize = .zero
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
@@ -144,6 +151,10 @@ struct BlueCursorView: View {
     @State private var navigationBubbleOpacity: Double = 0.0
     @State private var navigationBubbleSize: CGSize = .zero
 
+    /// Size of the lesson bubble, measured after layout, so it can be kept on screen.
+    @State private var lessonBubbleSize: CGSize = .zero
+    private let lessonBubbleWidth: CGFloat = 300
+
     /// The cursor position at the moment navigation started, used to detect
     /// if the user moves the cursor enough to cancel the navigation.
     @State private var cursorPositionWhenNavigationStarted: CGPoint = .zero
@@ -180,6 +191,21 @@ struct BlueCursorView: View {
         "here it is!",
         "found it!"
     ]
+
+    /// Below and to the right of the cursor, like the other bubbles, but kept fully on
+    /// screen. Near the bottom edge it goes above the cursor instead.
+    private var lessonBubblePosition: CGPoint {
+        let screenMargin: CGFloat = 8
+        let halfWidth = lessonBubbleSize.width / 2
+        let halfHeight = lessonBubbleSize.height / 2
+        let preferredCenterX = cursorPosition.x + 10 + halfWidth
+        let centerX = min(max(preferredCenterX, halfWidth + screenMargin), screenFrame.width - halfWidth - screenMargin)
+        let belowCursorCenterY = cursorPosition.y + 18 + halfHeight
+        let aboveCursorCenterY = cursorPosition.y - 18 - halfHeight
+        let fitsBelowCursor = belowCursorCenterY + halfHeight <= screenFrame.height - screenMargin
+        let centerY = fitsBelowCursor ? belowCursorCenterY : max(aboveCursorCenterY, halfHeight + screenMargin)
+        return CGPoint(x: centerX, y: centerY)
+    }
 
     var body: some View {
         ZStack {
@@ -256,6 +282,44 @@ struct BlueCursorView: View {
                     .onPreferenceChange(SizePreferenceKey.self) { newSize in
                         bubbleSize = newSize
                     }
+            }
+
+            // Lesson bubble: what went wrong, and the answer as text when the voice failed.
+            // Wider and multi-line, unlike the other bubbles, because an answer can run to a
+            // paragraph. It never takes clicks.
+            if isCursorOnThisScreen, let lessonBubble = companionManager.lessonBubble {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(lessonBubble.notice)
+                        .font(.system(size: 11, weight: .semibold))
+                    if let answerText = lessonBubble.answerText {
+                        Text(answerText)
+                            .font(.system(size: 12, weight: .regular))
+                    }
+                }
+                .foregroundColor(.white)
+                .multilineTextAlignment(.leading)
+                .frame(width: lessonBubbleWidth, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(DS.Colors.overlayCursorBlue)
+                        .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.5), radius: 6, x: 0, y: 0)
+                )
+                .overlay(
+                    GeometryReader { geo in
+                        Color.clear
+                            .preference(key: LessonBubbleSizePreferenceKey.self, value: geo.size)
+                    }
+                )
+                .position(lessonBubblePosition)
+                .animation(.spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0), value: cursorPosition)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+                .onPreferenceChange(LessonBubbleSizePreferenceKey.self) { newSize in
+                    lessonBubbleSize = newSize
+                }
             }
 
             // Navigation pointer bubble — shown when buddy arrives at a detected element.

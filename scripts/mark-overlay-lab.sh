@@ -5,6 +5,7 @@
 #
 #   scripts/mark-overlay-lab.sh
 #   scripts/mark-overlay-lab.sh --check-capture
+#   scripts/mark-overlay-lab.sh --check-staleness
 #   scripts/mark-overlay-lab.sh --reduce-motion --no-full-screen
 set -euo pipefail
 

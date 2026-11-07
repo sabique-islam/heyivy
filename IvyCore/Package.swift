@@ -32,7 +32,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "MarkOverlayLab",
-            dependencies: ["IvyCore", "IvyOverlay"],
+            dependencies: ["IvyCore", "IvyOverlay", "IvyLesson"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         // Runs a whole lesson: voice, Claude's script, text recognition, timing, and marks.

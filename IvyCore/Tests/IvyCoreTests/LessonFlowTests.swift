@@ -199,6 +199,7 @@ private func timeline(for spokenText: String, millisecondsPerCharacter: Double =
         (.rateLimited, .slowDown),
         (.spendLimitReached, .spendLimitReached),
         (.offline, .offline),
+        (.screenCaptureFailed, .cannotSeeScreen),
     ])
     func otherFailuresStopEverythingAndExplainWithoutRetrying(failure: LessonFailure, message: UserMessage) {
         var stateMachine = LessonStateMachine()
@@ -208,6 +209,57 @@ private func timeline(for spokenText: String, millisecondsPerCharacter: Double =
         let effects = stateMachine.handle(.failed(lessonID, failure))
         #expect(effects == [.stopAudio, .cancelLessonWork(lessonID), .clearMarks, .showMessage(message)])
         #expect(stateMachine.phase == .failed(failure))
+    }
+
+    @Test(arguments: [
+        (LessonFailure.transcriptionFailed, UserMessage.couldNotHearYou),
+        (.microphoneUnavailable, .microphoneUnavailable),
+        (.offline, .offline),
+        (.notAuthorized, .deviceNotAuthorized),
+    ])
+    func failuresWhileStillListeningStopAndExplain(failure: LessonFailure, message: UserMessage) {
+        var stateMachine = LessonStateMachine()
+        _ = stateMachine.handle(.keyPressed)
+        let lessonID = stateMachine.currentLessonID
+        let effects = stateMachine.handle(.failed(lessonID, failure))
+        #expect(effects == [.stopAudio, .cancelLessonWork(lessonID), .clearMarks, .showMessage(message)])
+        #expect(stateMachine.phase == .failed(failure))
+    }
+
+    @Test func everyMessageHasShortTextThatEndsASentence() {
+        let allMessages: [UserMessage] = [.voiceUnavailable, .couldNotGetAnswer, .deviceNotAuthorized, .slowDown, .spendLimitReached, .offline, .couldNotHearYou, .microphoneUnavailable, .cannotSeeScreen]
+        for message in allMessages {
+            #expect(!message.text.isEmpty)
+            #expect(message.text.count <= 120)
+            #expect(message.text.hasSuffix("."))
+        }
+        #expect(Set(allMessages.map(\.text)).count == allMessages.count)
+    }
+
+    @Test func aFailureAfterTheVoiceFailedReplacesItsMessage() {
+        // An expired token closes the voice socket first, then the answer is refused.
+        var stateMachine = LessonStateMachine()
+        _ = stateMachine.handle(.keyPressed)
+        let lessonID = stateMachine.currentLessonID
+        _ = stateMachine.handle(.keyReleased(transcriptIsEmpty: false))
+        _ = stateMachine.handle(.failed(lessonID, .voiceFailed))
+        #expect(stateMachine.handle(.failed(lessonID, .voiceFailed)) == [])
+        let effects = stateMachine.handle(.failed(lessonID, .notAuthorized))
+        #expect(effects == [.stopAudio, .cancelLessonWork(lessonID), .clearMarks, .showMessage(.deviceNotAuthorized)])
+        #expect(stateMachine.phase == .failed(.notAuthorized))
+        // And once that has stopped everything, nothing more is reported.
+        #expect(stateMachine.handle(.failed(lessonID, .answerFailed)) == [])
+    }
+
+    @Test(arguments: [
+        (401, "", LessonFailure?.some(.notAuthorized)),
+        (429, #"{"error":{"code":"rate_limited"}}"#, .some(.rateLimited)),
+        (429, #"{"error":{"code":"spend_limit_reached"}}"#, .some(.spendLimitReached)),
+        (500, "", nil),
+        (504, "", nil),
+    ])
+    func workerRefusalsAreReadFromTheStatusAndErrorCode(statusCode: Int, errorBody: String, expectedFailure: LessonFailure?) {
+        #expect(WorkerRefusal.failure(forStatusCode: statusCode, errorBody: errorBody) == expectedFailure)
     }
 
     @Test func lockingTheScreenOrUnpluggingADisplayCancelsCleanly() {

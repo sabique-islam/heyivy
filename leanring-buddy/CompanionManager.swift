@@ -97,6 +97,16 @@ final class CompanionManager: ObservableObject {
     /// asking, which is almost always what they're asking about. Ivy's own windows are
     /// left out of the capture, so the waveform overlay shown at key press isn't in it.
     private var screenCaptureStartedAtKeyPress: Task<[CompanionScreenCapture], Error>?
+    /// The single owner of each lesson's phase. It decides what a press, a failure or a
+    /// locked screen does, and this class carries out its effects.
+    private var lessonStateMachine = LessonStateMachine()
+    /// A message or an answer shown as text beside the cursor, when something went wrong.
+    @Published private(set) var lessonBubble: LessonBubble?
+    private var lessonBubbleHideTask: Task<Void, Never>?
+    /// True after the voice failed, so the rest of the answer goes into the bubble.
+    private var isShowingAnswerAsText = false
+    private var dictationFailureCancellable: AnyCancellable?
+    private var systemEventObservers: [NSObjectProtocol] = []
 
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -167,6 +177,8 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
+        bindDictationFailures()
+        observeLockSleepAndDisplayChanges()
         // Eagerly touch the Claude API so its TLS warmup handshake completes
         // well before the onboarding demo fires at ~40s into the video.
         _ = claudeAPI
@@ -489,6 +501,10 @@ final class CompanionManager: ObservableObject {
             currentResponseTask?.cancel()
             elevenLabsTTSClient.stopPlayback()
             clearDetectedElementLocation()
+            hideLessonBubble()
+            applyLessonEffects(lessonStateMachine.handle(.keyPressed))
+            // A lesson whose voice failed is no longer active to the state machine, but it may
+            // still be streaming its answer as text, so it's cancelled whatever its phase.
             activeLessonEngine?.cancel()
             activeLessonEngine = nil
             preparedLessonEngine?.cancel()
@@ -512,10 +528,7 @@ final class CompanionManager: ObservableObject {
 
             ClickyAnalytics.trackPushToTalkStarted()
 
-            // A question still connecting or finishing is left to finish, so it isn't lost.
-            if !buddyDictationManager.isDictationInProgress {
-                pendingKeyboardShortcutStartTask?.cancel()
-            }
+            pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = Task {
                 await buddyDictationManager.startPushToTalkFromKeyboardShortcut(
                     currentDraftText: "",
@@ -593,9 +606,18 @@ final class CompanionManager: ObservableObject {
         currentResponseTask?.cancel()
         elevenLabsTTSClient.stopPlayback()
 
+        let releaseEffects = lessonStateMachine.handle(.keyReleased(transcriptIsEmpty: false))
+        // Anything else means this lesson was already cancelled or failed while listening.
+        guard releaseEffects.contains(.captureScreensAndAsk(lessonStateMachine.currentLessonID)) else {
+            voiceState = .idle
+            return
+        }
+        let lessonID = lessonStateMachine.currentLessonID
+        isShowingAnswerAsText = false
+
         guard let lessonEngine = preparedLessonEngine ?? makeLessonEngine() else {
             print("⚠️ No Worker device token in the Keychain. Run scripts/mint-device-token.mjs.")
-            voiceState = .idle
+            handleLessonFailure(.notAuthorized, lessonID: lessonID)
             return
         }
         preparedLessonEngine = nil
@@ -619,8 +641,7 @@ final class CompanionManager: ObservableObject {
                 guard let cursorScreenCapture = screenCaptures.first(where: { $0.isCursorScreen }) ?? screenCaptures.first,
                       let fullResolutionImage = cursorScreenCapture.fullResolutionImage else {
                     print("⚠️ No screen capture to explain.")
-                    lessonEngine.cancel()
-                    voiceState = .idle
+                    handleLessonFailure(.screenCaptureFailed, lessonID: lessonID)
                     return
                 }
                 lessonEngine.timingLog.record("screen captured")
@@ -630,14 +651,28 @@ final class CompanionManager: ObservableObject {
                     geometry: CapturedScreenGeometry(
                         imagePixelSize: CGSize(width: cursorScreenCapture.screenshotWidthInPixels, height: cursorScreenCapture.screenshotHeightInPixels),
                         screenFrameInGlobalPoints: cursorScreenCapture.displayFrame
-                    )
+                    ),
+                    pointerLocationInGlobalPoints: cursorScreenCapture.pointerLocationAtCapture
                 )
 
                 lessonEngine.onFirstAudioHeard = { [weak self] in
-                    self?.voiceState = .responding
+                    guard let self else { return }
+                    _ = self.lessonStateMachine.handle(.firstAudioPlayed(lessonID))
+                    self.voiceState = .responding
+                }
+                lessonEngine.onSpeechTextAdded = { [weak self, weak lessonEngine] _ in
+                    guard let self, let lessonEngine, self.isShowingAnswerAsText else { return }
+                    self.showAnswerInLessonBubble(answerText: lessonEngine.spokenText, isComplete: false)
+                }
+                lessonEngine.onScriptFinished = { [weak self, weak lessonEngine] wasCutOff in
+                    guard let self, let lessonEngine, self.isShowingAnswerAsText else { return }
+                    let answerText = wasCutOff ? lessonEngine.spokenText + " (The answer was cut off.)" : lessonEngine.spokenText
+                    self.showAnswerInLessonBubble(answerText: answerText, isComplete: true)
+                    print("⏱️ \(lessonEngine.timingLog.summaryLine)")
                 }
                 lessonEngine.onFinished = { [weak self, weak lessonEngine] in
                     guard let self, let lessonEngine else { return }
+                    _ = self.lessonStateMachine.handle(.speechFinished(lessonID))
                     // Timings only. The log never holds what was said or shown.
                     print("⏱️ \(lessonEngine.timingLog.summaryLine)")
                     self.conversationHistory.append((userTranscript: transcript, assistantResponse: lessonEngine.spokenText))
@@ -648,20 +683,16 @@ final class CompanionManager: ObservableObject {
                     self.scheduleTransientHideIfNeeded()
                 }
                 lessonEngine.onFailed = { [weak self, weak lessonEngine] failure in
-                    // Clear messages for each failure come with D5. For now the lesson stops,
-                    // and the log says why.
-                    print("⚠️ Lesson failed: \(failure)")
-                    if let lessonEngine { print("⏱️ \(lessonEngine.timingLog.summaryLine)") }
-                    self?.voiceState = .idle
-                    self?.scheduleTransientHideIfNeeded()
+                    if let lessonEngine, failure != .voiceFailed { print("⏱️ \(lessonEngine.timingLog.summaryLine)") }
+                    self?.handleLessonFailure(failure, lessonID: lessonID)
                 }
 
                 let history = conversationHistory.map { LessonExchange(question: $0.userTranscript, spokenAnswer: $0.assistantResponse) }
                 lessonEngine.run(question: transcript, screen: lessonScreen, history: history)
             } catch {
+                guard !Task.isCancelled else { return }
                 print("⚠️ Screen capture failed: \(error)")
-                lessonEngine.cancel()
-                voiceState = .idle
+                handleLessonFailure(.screenCaptureFailed, lessonID: lessonID)
             }
         }
     }
@@ -670,6 +701,125 @@ final class CompanionManager: ObservableObject {
     private func makeLessonEngine() -> LessonEngine? {
         guard let deviceToken = WorkerDeviceToken.readDeviceToken() else { return nil }
         return LessonEngine(workerBaseURL: Self.workerBaseURL, deviceToken: deviceToken, markOverlay: markOverlay)
+    }
+
+    // MARK: - Lesson Failures
+
+    /// Every failure goes through the state machine, which decides what stops and what the
+    /// user is told. No failure is silent, and nothing retries.
+    private func handleLessonFailure(_ failure: LessonFailure, lessonID: LessonID) {
+        print("⚠️ Lesson failed: \(failure)")
+        applyLessonEffects(lessonStateMachine.handle(.failed(lessonID, failure)))
+        voiceState = .idle
+        scheduleTransientHideIfNeeded()
+    }
+
+    private func applyLessonEffects(_ lessonEffects: [LessonEffect]) {
+        for lessonEffect in lessonEffects {
+            switch lessonEffect {
+            case .stopAudio:
+                activeLessonEngine?.stopAudio()
+            case .cancelLessonWork:
+                currentResponseTask?.cancel()
+                activeLessonEngine?.cancel()
+                activeLessonEngine = nil
+                // No more answer text is coming, so a message shown next can time out.
+                isShowingAnswerAsText = false
+            case .clearMarks:
+                markOverlay.clearAll()
+            case .stopNewMarks:
+                activeLessonEngine?.stopNewMarks()
+            case .showAnswerAsText:
+                isShowingAnswerAsText = true
+                // The voice can fail after the whole script arrived, and then no more text is coming.
+                showAnswerInLessonBubble(answerText: activeLessonEngine?.spokenText ?? "", isComplete: activeLessonEngine?.hasScriptFinished ?? true)
+            case .showMessage(let userMessage):
+                // A partial answer shown as text stays only while the rest is still coming.
+                let answerTextToKeep = isShowingAnswerAsText ? lessonBubble?.answerText : nil
+                showLessonBubble(LessonBubble(notice: userMessage.text, answerText: answerTextToKeep))
+            case .startListening, .stopListening, .playThinkingCue, .captureScreensAndAsk, .fadeMarksAfterLesson:
+                // Carried out by the code that sent the event: dictation, the lesson engine,
+                // and the screen capture started at key press.
+                break
+            }
+        }
+    }
+
+    private func showAnswerInLessonBubble(answerText: String, isComplete: Bool) {
+        let notice = lessonBubble?.notice ?? UserMessage.voiceUnavailable.text
+        lessonBubble = LessonBubble(notice: notice, answerText: answerText.isEmpty ? nil : answerText)
+        lessonBubbleHideTask?.cancel()
+        if isComplete { scheduleLessonBubbleHide() }
+    }
+
+    private func showLessonBubble(_ newLessonBubble: LessonBubble) {
+        lessonBubble = newLessonBubble
+        // An answer still arriving as text keeps the bubble up until it's complete.
+        if !isShowingAnswerAsText { scheduleLessonBubbleHide() }
+    }
+
+    /// Long enough to read: six seconds, plus about fifteen characters a second of answer.
+    private func scheduleLessonBubbleHide() {
+        let answerCharacterCount = Double(lessonBubble?.answerText?.count ?? 0)
+        let readingSeconds = min(6 + answerCharacterCount / 15, 60)
+        lessonBubbleHideTask?.cancel()
+        lessonBubbleHideTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(readingSeconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.hideLessonBubble()
+            self?.scheduleTransientHideIfNeeded()
+        }
+    }
+
+    private func hideLessonBubble() {
+        lessonBubbleHideTask?.cancel()
+        lessonBubbleHideTask = nil
+        lessonBubble = nil
+        isShowingAnswerAsText = false
+    }
+
+    /// Recording and transcription failures happen before a lesson engine exists, so the
+    /// dictation manager reports them here.
+    private func bindDictationFailures() {
+        dictationFailureCancellable = buddyDictationManager.failurePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] failure in
+                guard let self else { return }
+                self.handleLessonFailure(failure, lessonID: self.lessonStateMachine.currentLessonID)
+            }
+    }
+
+    /// A lesson about a screen that's locked, asleep, or gone makes no sense, so it's
+    /// cancelled and its marks cleared.
+    private func observeLockSleepAndDisplayChanges() {
+        let workspaceNotifications = NSWorkspace.shared.notificationCenter
+        let workspaceEventNames: [Notification.Name] = [
+            NSWorkspace.screensDidSleepNotification,
+            NSWorkspace.willSleepNotification,
+            NSWorkspace.sessionDidResignActiveNotification,
+        ]
+        for eventName in workspaceEventNames {
+            systemEventObservers.append(workspaceNotifications.addObserver(forName: eventName, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.cancelLessonBecauseTheScreenWentAway(reason: eventName.rawValue) }
+            })
+        }
+        systemEventObservers.append(DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cancelLessonBecauseTheScreenWentAway(reason: "screen locked") }
+        })
+        systemEventObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cancelLessonBecauseTheScreenWentAway(reason: "displays changed") }
+        })
+    }
+
+    private func cancelLessonBecauseTheScreenWentAway(reason: String) {
+        print("🖥️ Cancelling any lesson: \(reason)")
+        applyLessonEffects(lessonStateMachine.handle(.screenLockedSleptOrDisplaysChanged))
+        // Covers a lesson whose voice failed and is still showing its answer as text.
+        activeLessonEngine?.cancel()
+        activeLessonEngine = nil
+        buddyDictationManager.cancelCurrentDictation(preserveDraftText: false)
+        hideLessonBubble()
+        voiceState = .idle
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
@@ -690,6 +840,12 @@ final class CompanionManager: ObservableObject {
             // Wait for pointing animation to finish (location is cleared
             // when the buddy flies back to the cursor)
             while detectedElementScreenLocation != nil {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled else { return }
+            }
+
+            // A failure message or an answer shown as text stays up until it's read.
+            while lessonBubble != nil {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }
@@ -921,4 +1077,12 @@ final class CompanionManager: ObservableObject {
             }
         }
     }
+}
+
+/// What the bubble beside the cursor shows when a lesson goes wrong.
+struct LessonBubble: Equatable {
+    /// What happened, and what to do about it.
+    var notice: String
+    /// The answer, when the voice failed and it's shown as text instead.
+    var answerText: String?
 }

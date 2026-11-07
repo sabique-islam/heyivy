@@ -11,6 +11,7 @@ import AppKit
 import AVFoundation
 import Combine
 import Foundation
+import IvyCore
 import IvyLesson
 import Speech
 
@@ -227,6 +228,9 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     private static let recordedAudioPowerHistoryBaselineLevel: CGFloat = 0.02
     private static let recordedAudioPowerHistorySampleIntervalSeconds: TimeInterval = 0.07
 
+    /// Recording and transcription failures, for the app to explain. Cancelling isn't one.
+    let failurePublisher = PassthroughSubject<LessonFailure, Never>()
+
     @Published private(set) var isRecordingFromMicrophoneButton = false
     @Published private(set) var isRecordingFromKeyboardShortcut = false
     @Published private(set) var isKeyboardShortcutSessionActiveOrFinalizing = false
@@ -415,6 +419,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         guard await requestMicrophoneAndSpeechPermissionsWithoutDuplicatePrompts() else {
             print("🎙️ BuddyDictationManager: permissions missing or denied")
             isPreparingToRecord = false
+            failurePublisher.send(.microphoneUnavailable)
             return
         }
         guard !Task.isCancelled else {
@@ -479,6 +484,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             // The mic is already on by now, so it has to be turned off here.
             microphoneCapture.stop()
             resetSessionState()
+            if let failure = Self.lessonFailure(for: error) { failurePublisher.send(failure) }
         }
     }
 
@@ -550,7 +556,11 @@ final class BuddyDictationManager: NSObject, ObservableObject {
 
         // The mic starts before transcription connects, which takes about a second, so the
         // first words of a question are held rather than lost.
-        try startCapturingMicrophone()
+        do {
+            try startCapturingMicrophone()
+        } catch {
+            throw MicrophoneStartError(underlyingError: error)
+        }
 
         print("🎙️ BuddyDictationManager: opening transcription provider \(transcriptionProvider.displayName)")
 
@@ -611,6 +621,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
                 fallback: "couldn't transcribe that. try again."
             )
             cancelCurrentDictation(preserveDraftText: false)
+            if let failure = Self.lessonFailure(for: error) { failurePublisher.send(failure) }
         }
     }
 
@@ -887,6 +898,29 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         NSWorkspace.shared.open(settingsURL)
     }
 
+    /// What to tell the user about a recording or transcription error. Nil when it isn't a
+    /// failure, as when the start was cancelled.
+    static func lessonFailure(for error: Error) -> LessonFailure? {
+        if error is CancellationError { return nil }
+        if error is MicrophoneStartError { return .microphoneUnavailable }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cancelled:
+                return nil
+            case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost, .dataNotAllowed:
+                return .offline
+            default:
+                return .transcriptionFailed
+            }
+        }
+        if let tokenError = error as? AssemblyAIStreamingTranscriptionProviderError,
+           let workerStatusCode = tokenError.workerStatusCode,
+           let workerRefusal = WorkerRefusal.failure(forStatusCode: workerStatusCode, errorBody: tokenError.workerErrorBody) {
+            return workerRefusal
+        }
+        return .transcriptionFailed
+    }
+
     private func userFacingErrorMessage(from error: Error, fallback: String) -> String {
         if let localizedError = error as? LocalizedError,
            let errorDescription = localizedError.errorDescription?
@@ -903,6 +937,11 @@ final class BuddyDictationManager: NSObject, ObservableObject {
 
         return fallback
     }
+}
+
+/// The mic couldn't start, as opposed to transcription failing to connect.
+private struct MicrophoneStartError: Error {
+    let underlyingError: Error
 }
 
 /// Holds the audio recorded while transcription is still connecting, then hands it over in
