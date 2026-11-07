@@ -141,7 +141,7 @@ public enum TargetResolver {
 
     /// Lowercased, with typographic dashes and quotes made plain and edge punctuation removed.
     /// "fibonacci(n" and "fibonacci(n)" both become "fibonacci(n".
-    static func normalizedForMatching(_ text: String) -> String {
+    public static func normalizedForMatching(_ text: String) -> String {
         var normalizedText = text.lowercased()
         for dash in ["\u{2212}", "\u{2013}", "\u{2014}", "\u{2012}"] {
             normalizedText = normalizedText.replacingOccurrences(of: dash, with: "-")

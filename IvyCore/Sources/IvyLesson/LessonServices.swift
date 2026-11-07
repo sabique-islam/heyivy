@@ -26,7 +26,8 @@ public enum ClaudeScriptStream {
         screenshotJPEGData: Data,
         screenshotLabel: String,
         question: String,
-        history: [LessonExchange]
+        history: [LessonExchange],
+        onTokenUsage: (@Sendable (_ inputTokens: Int, _ outputTokens: Int) -> Void)? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let streamTask = Task {
@@ -58,11 +59,24 @@ public enum ClaudeScriptStream {
                         throw LessonFailureError(failure: failure(forStatusCode: statusCode, errorBody: errorBody))
                     }
 
+                    // Claude reports input tokens at the start and output tokens at the end. Only the
+                    // eval tool asks for them, to report what a run cost.
+                    var inputTokens = 0
                     for try await line in responseBytes.lines {
                         guard line.hasPrefix("data: "),
                               let eventData = line.dropFirst(6).data(using: .utf8),
                               let event = try? JSONSerialization.jsonObject(with: eventData) as? [String: Any] else { continue }
                         let eventType = event["type"] as? String
+                        if eventType == "message_start",
+                           let message = event["message"] as? [String: Any],
+                           let usage = message["usage"] as? [String: Any] {
+                            inputTokens = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].reduce(0) { $0 + ((usage[$1] as? Int) ?? 0) }
+                        }
+                        if eventType == "message_delta",
+                           let usage = event["usage"] as? [String: Any],
+                           let outputTokens = usage["output_tokens"] as? Int {
+                            onTokenUsage?(inputTokens, outputTokens)
+                        }
                         if eventType == "content_block_delta",
                            let delta = event["delta"] as? [String: Any],
                            delta["type"] as? String == "text_delta",

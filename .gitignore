@@ -25,3 +25,6 @@ coding-plans/
 IvyCore/.build/
 IvyCore/.build-xcode/
 IvyCore/.swiftpm/
+
+# Lesson eval runs, with review images. Summaries worth keeping go in the drawing plan.
+eval/results/

@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "IvyLesson", targets: ["IvyLesson"]),
         .executable(name: "voice-sync-lab", targets: ["VoiceSyncLab"]),
         .executable(name: "mark-overlay-lab", targets: ["MarkOverlayLab"]),
+        .executable(name: "lesson-eval", targets: ["LessonEval"]),
         .executable(name: "lesson-lab", targets: ["LessonLab"]),
     ],
     targets: [
@@ -28,6 +29,12 @@ let package = Package(
         .target(
             name: "IvyOverlay",
             dependencies: ["IvyCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // Grades Ivy's marks on the evaluation screens in eval/cases (drawing plan, D6).
+        .executableTarget(
+            name: "LessonEval",
+            dependencies: ["IvyCore", "IvyLesson"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
