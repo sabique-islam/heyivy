@@ -19,8 +19,12 @@ public final class MicrophoneCapture {
     // Written on the audio thread and read on the main thread, so they're behind a lock.
     private let measurementLock = NSLock()
     private var capturedBufferCountStorage = 0
+    private var capturedSecondsStorage = 0.0
     private var peakLevelStorage: Float = 0
     public var capturedBufferCount: Int { measurementLock.withLock { capturedBufferCountStorage } }
+    /// macOS treats the requested buffer size as a hint, so this, not the buffer count, says
+    /// how much audio arrived.
+    public var capturedSeconds: Double { measurementLock.withLock { capturedSecondsStorage } }
     public var peakLevel: Float { measurementLock.withLock { peakLevelStorage } }
     public private(set) var restartsAfterDeviceChange = 0
     public private(set) var deviceChangesIgnoredWhileRunning = 0
@@ -50,6 +54,7 @@ public final class MicrophoneCapture {
         self.onAudioBuffer = onAudioBuffer
         measurementLock.withLock {
             capturedBufferCountStorage = 0
+            capturedSecondsStorage = 0
             peakLevelStorage = 0
         }
         restartsAfterDeviceChange = 0
@@ -91,6 +96,7 @@ public final class MicrophoneCapture {
             }
             self.measurementLock.withLock {
                 self.capturedBufferCountStorage += 1
+                self.capturedSecondsStorage += Double(buffer.frameLength) / buffer.format.sampleRate
                 self.peakLevelStorage = max(self.peakLevelStorage, bufferPeakLevel)
             }
             self.onAudioBuffer?(buffer)

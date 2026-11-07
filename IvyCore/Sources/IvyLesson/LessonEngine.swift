@@ -88,23 +88,28 @@ public final class LessonEngine {
 
     public func run(question: String, screen: LessonScreen, history: [LessonExchange]) {
         self.screen = screen
-        startSpeechPlayer(attemptsRemaining: Self.speechPlayerStartAttempts)
-        startTextRecognition(on: screen)
-        startDisplayLink()
 
         let imageSize = screen.geometry.imagePixelSize
         let systemPrompt = LessonPrompt.systemPrompt(imageWidth: Int(imageSize.width), imageHeight: Int(imageSize.height))
         let screenshotLabel = "The user's screen, \(Int(imageSize.width))x\(Int(imageSize.height)) pixels."
+        // Making the stream sends the request at once, off the main thread. It goes first
+        // because starting audio output below blocks for about 0.3 s, and Claude's answer is
+        // what everything else waits for.
+        let scriptStream = ClaudeScriptStream.streamScript(
+            workerBaseURL: workerBaseURL, deviceToken: deviceToken, systemPrompt: systemPrompt,
+            screenshotJPEGData: screen.screenshotJPEGData, screenshotLabel: screenshotLabel, question: question, history: history
+        )
         timingLog.record("question sent")
+
+        startTextRecognition(on: screen)
+        startSpeechPlayer(attemptsRemaining: Self.speechPlayerStartAttempts)
+        startDisplayLink()
 
         scriptTask = Task { [weak self] in
             guard let self else { return }
             var hasReceivedText = false
             do {
-                for try await scriptText in ClaudeScriptStream.streamScript(
-                    workerBaseURL: workerBaseURL, deviceToken: deviceToken, systemPrompt: systemPrompt,
-                    screenshotJPEGData: screen.screenshotJPEGData, screenshotLabel: screenshotLabel, question: question, history: history
-                ) {
+                for try await scriptText in scriptStream {
                     if !hasReceivedText {
                         hasReceivedText = true
                         timingLog.record("first script text")
@@ -212,7 +217,8 @@ public final class LessonEngine {
         case .dropped(let reason):
             outcome.outcome = "dropped: \(reason)"
             markOutcomes.append(outcome)
-            timingLog.record("mark \(markRequest.markIndex) dropped")
+            // Why, and what kind of target, but never the words, which come from the screen.
+            timingLog.record("mark \(markRequest.markIndex) dropped (\(reason), \(Self.targetDescription(markRequest.target)))")
             return
         }
         markOutcomes.append(outcome)
@@ -225,6 +231,14 @@ public final class LessonEngine {
             spokenWords: markRequest.spokenWords,
             payload: MarkDrawing(kind: markRequest.kind, globalRect: screen.geometry.globalRect(fromImagePixelRect: targetBox), labelText: labelText)
         )
+    }
+
+    private static func targetDescription(_ target: MarkTarget) -> String {
+        switch target {
+        case .visibleText(let words): return "text target of \(words.count) word\(words.count == 1 ? "" : "s")"
+        case .nonText: return "non-text target"
+        case .labelText: return "label"
+        }
     }
 
     private func screenWillRefresh(displayHostSeconds: Double) {
@@ -248,6 +262,7 @@ public final class LessonEngine {
         }
         for fadedMarkIndex in timelineUpdate.marksToFade { markOverlay.fade(markID: fadedMarkIndex) }
         for lateMarkIndex in timelineUpdate.marksDroppedAsLate {
+            timingLog.record("mark \(lateMarkIndex) dropped (too late for its words)")
             if let outcomeIndex = markOutcomes.firstIndex(where: { $0.markIndex == lateMarkIndex }) {
                 markOutcomes[outcomeIndex].outcome = "dropped: too late for its words"
             }

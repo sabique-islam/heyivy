@@ -101,7 +101,18 @@ final class LabController: NSObject, NSApplicationDelegate {
             return
         }
 
-        if options.mode == "mic-check" {
+        if options.mode == "mic-experiment" {
+            AVCaptureDevice.requestAccess(for: .audio) { microphoneAllowed in
+                DispatchQueue.main.async {
+                    guard microphoneAllowed else { return self.finish(withError: "Microphone access was denied.") }
+                    MicrophoneExperiment.runAll { reports in
+                        self.result["strategies"] = reports
+                        self.finish(withError: nil)
+                    }
+                }
+            }
+            return
+        } else if options.mode == "mic-check" {
             // Records for 4 seconds exactly as push-to-talk does, then reports what arrived.
             AVCaptureDevice.requestAccess(for: .audio) { microphoneAllowed in
                 DispatchQueue.main.async {
