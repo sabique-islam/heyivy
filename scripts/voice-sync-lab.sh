@@ -39,7 +39,13 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$app" >/dev/null 2>&1
+# Signing with your Apple Development certificate, when you have one, keeps the lab's
+# permissions across rebuilds. Ad hoc signing changes identity with every build.
+if security find-identity -p codesigning -v 2>/dev/null | grep -q "Apple Development"; then
+  codesign --force --sign "Apple Development" "$app" >/dev/null 2>&1
+else
+  codesign --force --sign - "$app" >/dev/null 2>&1
+fi
 
 rm -f "$result_file"
 # open gives the lab its own identity for permissions, and -W waits for it to quit.
