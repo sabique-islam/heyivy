@@ -228,12 +228,20 @@ public final class StreamingSpeechPlayer {
         streamHasEnded && lastRenderedContentSeconds >= scheduledContentSeconds - 0.001
     }
 
+    /// Silent from the next audio cycle. Stopping the engine blocks for about 30 ms, which
+    /// would add to how long an interrupt takes to go quiet, so the output is muted first
+    /// and the engine stops just after.
     public func stop() {
         if let outputDeviceChangeObserver {
             NotificationCenter.default.removeObserver(outputDeviceChangeObserver)
             self.outputDeviceChangeObserver = nil
         }
-        playerNode.stop()
-        audioEngine.stop()
+        audioEngine.mainMixerNode.outputVolume = 0
+        let playerNodeToStop = playerNode
+        let audioEngineToStop = audioEngine
+        DispatchQueue.main.async {
+            playerNodeToStop.stop()
+            audioEngineToStop.stop()
+        }
     }
 }
