@@ -194,6 +194,7 @@ struct TrialRecord: Encodable {
     var marksOnAcceptable: Int
     var marksOnHostile: Int
     var marksOnWhatTheyNamed: Int
+    var marksUnverified: Int
     var marksElsewhere: Int
     var firstTextMilliseconds: Int?
     var totalMilliseconds: Int
@@ -389,7 +390,7 @@ final class EvalController: NSObject, NSApplicationDelegate {
             passed: grade.passed, failureReasons: grade.failureReasons, spokenText: spokenText, marks: markRecords,
             droppedByParser: scriptParser.droppedMarks.map { "\($0)" },
             drawnMarkCount: grade.drawnMarkCount, marksOnTarget: grade.marksOnTarget, marksOnAcceptable: grade.marksOnAcceptable,
-            marksOnHostile: grade.marksOnHostile, marksOnWhatTheyNamed: grade.marksOnWhatTheyNamed, marksElsewhere: grade.marksElsewhere,
+            marksOnHostile: grade.marksOnHostile, marksOnWhatTheyNamed: grade.marksOnWhatTheyNamed, marksUnverified: grade.marksUnverified, marksElsewhere: grade.marksElsewhere,
             firstTextMilliseconds: firstTextMilliseconds,
             totalMilliseconds: Int(((ProcessInfo.processInfo.systemUptime - startUptime) * 1000).rounded()),
             inputTokens: usage.input, outputTokens: usage.output,
@@ -412,7 +413,7 @@ final class EvalController: NSObject, NSApplicationDelegate {
     private static func errorRecord(evalCase: EvalCase, trial: Int, error: String) -> TrialRecord {
         TrialRecord(caseID: evalCase.id, category: evalCase.category, split: evalCase.split, trial: trial, question: evalCase.question,
                     passed: false, failureReasons: [error], spokenText: "", marks: [], droppedByParser: [], drawnMarkCount: 0,
-                    marksOnTarget: 0, marksOnAcceptable: 0, marksOnHostile: 0, marksOnWhatTheyNamed: 0, marksElsewhere: 0, firstTextMilliseconds: nil,
+                    marksOnTarget: 0, marksOnAcceptable: 0, marksOnHostile: 0, marksOnWhatTheyNamed: 0, marksUnverified: 0, marksElsewhere: 0, firstTextMilliseconds: nil,
                     totalMilliseconds: 0, inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0, recognizedWordCount: 0, recognizedWordsForReview: nil, error: error)
     }
 
@@ -447,7 +448,7 @@ final class EvalController: NSObject, NSApplicationDelegate {
         for drawn in drawnBoxes {
             switch drawn.landing {
             case .onTarget, .onAcceptable: context.setStrokeColor(CGColor(srgbRed: 1, green: 0.79, blue: 0.24, alpha: 1))
-            case .onWhatItNamed: context.setStrokeColor(CGColor(srgbRed: 0.6, green: 0.6, blue: 0.6, alpha: 1))
+            case .onWhatItNamed, .unverified: context.setStrokeColor(CGColor(srgbRed: 0.6, green: 0.6, blue: 0.6, alpha: 1))
             case .onHostile, .elsewhere: context.setStrokeColor(CGColor(srgbRed: 1, green: 0, blue: 0.8, alpha: 1))
             }
             context.stroke(flipped(drawn.box.insetBy(dx: -3, dy: -3)))
@@ -505,8 +506,8 @@ final class EvalController: NSObject, NSApplicationDelegate {
         lines.append("")
         lines.append("Split \(runInfo["split"] ?? ""), \(runInfo["trials"] ?? 1) trial(s) per case, prompt \(runInfo["promptSHA256Prefix"] ?? ""), model \(runInfo["modelNote"] ?? ""), \(runInfo["date"] ?? "").")
         lines.append("")
-        lines.append("| Screen type | Trials | Passed | Any mark drawn | Hit the target | Trials with a wrong mark | Wrong marks / drawn | Secondary marks | Dropped marks |")
-        lines.append("|---|---|---|---|---|---|---|---|---|")
+        lines.append("| Screen type | Trials | Passed | Any mark drawn | Hit the target | Trials with a wrong mark | Wrong marks / drawn | Secondary marks | For review | Dropped marks |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
         let categories = Array(Set(records.map(\.category))).sorted()
         for category in categories + ["All"] {
             let rows = category == "All" ? records : records.filter { $0.category == category }
@@ -518,7 +519,7 @@ final class EvalController: NSObject, NSApplicationDelegate {
             let secondary = rows.map(\.marksOnWhatTheyNamed).reduce(0, +)
             let name = category == "All" ? "**All**" : category
             let hitTarget = screenRows.filter { $0.marksOnTarget + $0.marksOnAcceptable > 0 }.count
-            lines.append("| \(name) | \(rows.count) | \(percent(rows.filter(\.passed).count, rows.count)) | \(percent(rows.filter { $0.drawnMarkCount > 0 }.count, rows.count)) | \(percent(hitTarget, screenRows.count)) | \(percent(rows.filter { $0.marksElsewhere + $0.marksOnHostile > 0 }.count, rows.count)) | \(percent(wrong, drawn)) | \(secondary) | \(dropped) of \(requested) |")
+            lines.append("| \(name) | \(rows.count) | \(percent(rows.filter(\.passed).count, rows.count)) | \(percent(rows.filter { $0.drawnMarkCount > 0 }.count, rows.count)) | \(percent(hitTarget, screenRows.count)) | \(percent(rows.filter { $0.marksElsewhere + $0.marksOnHostile > 0 }.count, rows.count)) | \(percent(wrong, drawn)) | \(secondary) | \(rows.map(\.marksUnverified).reduce(0, +)) | \(dropped) of \(requested) |")
         }
         let firstTextTimes = records.compactMap(\.firstTextMilliseconds)
         let cost = records.map(\.estimatedCostUSD).reduce(0, +)
@@ -534,6 +535,11 @@ final class EvalController: NSObject, NSApplicationDelegate {
         if !droppedReasons.isEmpty {
             lines.append("")
             lines.append("Why marks were dropped: " + droppedReasons.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: ", ") + ".")
+        }
+        let needingReview = records.filter { $0.marksUnverified > 0 }
+        if !needingReview.isEmpty {
+            lines.append("")
+            lines.append("Marks without words that missed the target, for a person to judge from the review images: " + needingReview.map { "`\($0.caseID)` (\($0.marksUnverified))" }.joined(separator: ", ") + ".")
         }
         let failures = records.filter { !$0.passed }
         if !failures.isEmpty {
