@@ -1,0 +1,82 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 1470px; height: 956px; overflow: hidden; }
+body { font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif; font-size: 14px; background: #7a8699; }
+.desktop { position: absolute; inset: 0; background: linear-gradient(160deg, #5d6b85, #9aa7b8); }
+.menubar { position: absolute; top: 0; left: 0; right: 0; height: 26px; background: rgba(240,240,245,0.85); font-size: 13px; display: flex; gap: 18px; padding: 4px 14px; color: #111; }
+.menubar b { font-weight: 700; }
+.window { position: absolute; top: 46px; left: 60px; width: 1350px; height: 880px; border-radius: 10px; overflow: hidden; background: #fff; box-shadow: 0 20px 60px rgba(0,0,0,0.35); display: flex; flex-direction: column; }
+.titlebar { height: 38px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #ececec; border-bottom: 1px solid #d0d0d0; font-size: 13px; color: #333; }
+.dots { display: flex; gap: 8px; margin-right: 12px; }
+.dots i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.dots i:nth-child(1) { background: #ff5f57; } .dots i:nth-child(2) { background: #febc2e; } .dots i:nth-child(3) { background: #28c840; }
+.title { flex: 1; text-align: center; margin-right: 80px; }
+.content { flex: 1; position: relative; overflow: hidden; }
+.dark .window { background: #1e1e1e; color: #ddd; }
+.dark .titlebar { background: #2b2b2b; border-color: #111; color: #bbb; }
+.dark .menubar { background: rgba(30,30,35,0.85); color: #eee; }
+
+.log { padding: 10px 14px; font-family: Menlo, monospace; font-size: 10px; line-height: 14px; white-space: pre; color: #333; }
+</style></head>
+<body class=""><div class="desktop"></div><div class="menubar"><span></span><b>Console</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span></div>
+<div class="window"><div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="title">server.log — Console</div></div>
+<div class="content"><div class="log">2026-11-07 09:00:00 INFO http: GET /api/items 200 12ms
+2026-11-07 09:01:07 INFO http: GET /api/items 200 13ms
+2026-11-07 09:02:14 INFO http: GET /api/items 200 14ms
+2026-11-07 09:03:21 INFO http: GET /api/items 200 15ms
+2026-11-07 09:04:28 INFO http: GET /api/items 200 16ms
+2026-11-07 09:05:35 INFO http: GET /api/items 200 17ms
+2026-11-07 09:06:42 INFO http: GET /api/items 200 18ms
+2026-11-07 09:07:49 INFO http: GET /api/items 200 19ms
+2026-11-07 09:08:56 INFO http: GET /api/items 200 20ms
+2026-11-07 09:09:03 INFO http: GET /api/items 200 21ms
+2026-11-07 09:10:10 INFO http: GET /api/items 200 22ms
+2026-11-07 09:11:17 INFO http: GET /api/items 200 23ms
+2026-11-07 09:12:24 INFO http: GET /api/items 200 24ms
+2026-11-07 09:13:31 INFO http: GET /api/items 200 25ms
+2026-11-07 09:14:38 INFO http: GET /api/items 200 26ms
+2026-11-07 09:15:45 INFO http: GET /api/items 200 27ms
+2026-11-07 09:16:52 INFO http: GET /api/items 200 28ms
+2026-11-07 09:17:59 INFO http: GET /api/items 200 29ms
+2026-11-07 09:18:06 INFO http: GET /api/items 200 30ms
+2026-11-07 09:19:13 INFO http: GET /api/items 200 31ms
+2026-11-07 09:20:20 INFO http: GET /api/items 200 32ms
+2026-11-07 09:21:27 INFO http: GET /api/items 200 33ms
+2026-11-07 09:22:34 INFO http: GET /api/items 200 34ms
+2026-11-07 09:23:41 INFO http: GET /api/items 200 35ms
+2026-11-07 09:24:48 INFO http: GET /api/items 200 36ms
+2026-11-07 09:25:55 INFO http: GET /api/items 200 37ms
+2026-11-07 09:26:02 INFO http: GET /api/items 200 38ms
+2026-11-07 09:27:09 INFO http: GET /api/items 200 39ms
+2026-11-07 09:28:16 INFO http: GET /api/items 200 40ms
+2026-11-07 09:29:23 INFO http: GET /api/items 200 41ms
+2026-11-07 09:30:30 INFO http: GET /api/items 200 12ms
+2026-11-07 09:31:37 INFO http: GET /api/items 200 13ms
+2026-11-07 09:32:44 INFO http: GET /api/items 200 14ms
+2026-11-07 09:33:51 INFO http: GET /api/items 200 15ms
+2026-11-07 09:34:58 INFO http: GET /api/items 200 16ms
+2026-11-07 09:35:05 INFO http: GET /api/items 200 17ms
+2026-11-07 09:36:12 INFO http: GET /api/items 200 18ms
+2026-11-07 09:37:19 INFO http: GET /api/items 200 19ms
+2026-11-07 09:38:26 INFO http: GET /api/items 200 20ms
+2026-11-07 09:39:41 <span data-target>ERROR queue: message retried 5 times, moved to dead letter</span>
+2026-11-07 09:40:40 INFO http: GET /api/items 200 22ms
+2026-11-07 09:41:47 INFO http: GET /api/items 200 23ms
+2026-11-07 09:42:54 INFO http: GET /api/items 200 24ms
+2026-11-07 09:43:01 INFO http: GET /api/items 200 25ms
+2026-11-07 09:44:08 INFO http: GET /api/items 200 26ms
+2026-11-07 09:45:15 INFO http: GET /api/items 200 27ms
+2026-11-07 09:46:22 INFO http: GET /api/items 200 28ms
+2026-11-07 09:47:29 INFO http: GET /api/items 200 29ms
+2026-11-07 09:48:36 INFO http: GET /api/items 200 30ms
+2026-11-07 09:49:43 INFO http: GET /api/items 200 31ms
+2026-11-07 09:50:50 INFO http: GET /api/items 200 32ms
+2026-11-07 09:51:57 INFO http: GET /api/items 200 33ms
+2026-11-07 09:52:04 INFO http: GET /api/items 200 34ms
+2026-11-07 09:53:11 INFO http: GET /api/items 200 35ms
+2026-11-07 09:54:18 INFO http: GET /api/items 200 36ms
+2026-11-07 09:55:25 INFO http: GET /api/items 200 37ms
+2026-11-07 09:56:32 INFO http: GET /api/items 200 38ms
+2026-11-07 09:57:39 INFO http: GET /api/items 200 39ms
+2026-11-07 09:58:46 INFO http: GET /api/items 200 40ms
+2026-11-07 09:59:53 INFO http: GET /api/items 200 41ms</div></div></div></body></html>

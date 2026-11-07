@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 1470px; height: 956px; overflow: hidden; }
+body { font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif; font-size: 14px; background: #7a8699; }
+.desktop { position: absolute; inset: 0; background: linear-gradient(160deg, #5d6b85, #9aa7b8); }
+.menubar { position: absolute; top: 0; left: 0; right: 0; height: 26px; background: rgba(240,240,245,0.85); font-size: 13px; display: flex; gap: 18px; padding: 4px 14px; color: #111; }
+.menubar b { font-weight: 700; }
+.window { position: absolute; top: 46px; left: 60px; width: 1350px; height: 880px; border-radius: 10px; overflow: hidden; background: #fff; box-shadow: 0 20px 60px rgba(0,0,0,0.35); display: flex; flex-direction: column; }
+.titlebar { height: 38px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #ececec; border-bottom: 1px solid #d0d0d0; font-size: 13px; color: #333; }
+.dots { display: flex; gap: 8px; margin-right: 12px; }
+.dots i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.dots i:nth-child(1) { background: #ff5f57; } .dots i:nth-child(2) { background: #febc2e; } .dots i:nth-child(3) { background: #28c840; }
+.title { flex: 1; text-align: center; margin-right: 80px; }
+.content { flex: 1; position: relative; overflow: hidden; }
+.dark .window { background: #1e1e1e; color: #ddd; }
+.dark .titlebar { background: #2b2b2b; border-color: #111; color: #bbb; }
+.dark .menubar { background: rgba(30,30,35,0.85); color: #eee; }
+
+.editor { display: flex; height: 100%; font-family: "SF Mono", Menlo, monospace; font-size: 16px; }
+.sidebar { width: 230px; background: #f3f3f3; border-right: 1px solid #ddd; padding: 12px; font-family: -apple-system, sans-serif; font-size: 13px; color: #444; }
+.sidebar div { padding: 3px 6px; } .sidebar .open { background: #dcdcdc; border-radius: 4px; }
+.code { flex: 1; padding: 18px 0; line-height: 26px; white-space: pre; color: #222; }
+.code .line { display: block; padding-left: 16px; } .code .number { display: inline-block; width: 36px; color: #aaa; text-align: right; margin-right: 22px; }
+.keyword { color: #a626a4; } .string { color: #50a14f; } .comment { color: #a0a1a7; font-style: italic; }
+.terminal { position: absolute; left: 230px; right: 0; bottom: 0; height: 190px; background: #fafafa; border-top: 1px solid #ddd; padding: 12px 18px; font-family: "SF Mono", Menlo, monospace; font-size: 14px; color: #333; white-space: pre; line-height: 21px; }
+.dark .sidebar { background: #252526; border-color: #111; color: #ccc; } .dark .sidebar .open { background: #37373d; }
+.dark .code { color: #d4d4d4; } .dark .keyword { color: #c586c0; } .dark .string { color: #ce9178; } .dark .comment { color: #6a9955; }
+.dark .terminal { background: #181818; border-color: #333; color: #ccc; }
+</style></head>
+<body class="dark"><div class="desktop"></div><div class="menubar"><span></span><b>Code</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span></div>
+<div class="window"><div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="title">retry.py — Editor</div></div>
+<div class="content"><div class="editor"><div class="sidebar"><div class="">README.md</div><div class="open">retry.py</div><div class="">tests</div><div class="">requirements.txt</div></div><div class="code"><span class="line"><span class="number">1</span>import time</span><span class="line"><span class="number">2</span></span><span class="line"><span class="number">3</span>def retry(action, attempts=3):</span><span class="line"><span class="number">4</span>    for attempt in range(attempts):</span><span class="line"><span class="number">5</span>        try:</span><span class="line"><span class="number">6</span>            return action()</span><span class="line"><span class="number">7</span>        except Exception:</span><span class="line"><span class="number">8</span>            <span data-target>time.sleep(2 ** attempt * 1000)</span></span><span class="line"><span class="number">9</span>    raise RuntimeError(&quot;gave up&quot;)</span></div></div><div class="terminal">$ run retry.py
+<span data-ok>(the program hangs for a very long time)</span></div></div></div></body></html>

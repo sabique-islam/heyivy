@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 1470px; height: 956px; overflow: hidden; }
+body { font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif; font-size: 14px; background: #7a8699; }
+.desktop { position: absolute; inset: 0; background: linear-gradient(160deg, #5d6b85, #9aa7b8); }
+.menubar { position: absolute; top: 0; left: 0; right: 0; height: 26px; background: rgba(240,240,245,0.85); font-size: 13px; display: flex; gap: 18px; padding: 4px 14px; color: #111; }
+.menubar b { font-weight: 700; }
+.window { position: absolute; top: 46px; left: 60px; width: 1350px; height: 880px; border-radius: 10px; overflow: hidden; background: #fff; box-shadow: 0 20px 60px rgba(0,0,0,0.35); display: flex; flex-direction: column; }
+.titlebar { height: 38px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #ececec; border-bottom: 1px solid #d0d0d0; font-size: 13px; color: #333; }
+.dots { display: flex; gap: 8px; margin-right: 12px; }
+.dots i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.dots i:nth-child(1) { background: #ff5f57; } .dots i:nth-child(2) { background: #febc2e; } .dots i:nth-child(3) { background: #28c840; }
+.title { flex: 1; text-align: center; margin-right: 80px; }
+.content { flex: 1; position: relative; overflow: hidden; }
+.dark .window { background: #1e1e1e; color: #ddd; }
+.dark .titlebar { background: #2b2b2b; border-color: #111; color: #bbb; }
+.dark .menubar { background: rgba(30,30,35,0.85); color: #eee; }
+
+.viewer { background: #525659; height: 100%; display: flex; justify-content: center; padding-top: 24px; }
+.paper { width: 760px; height: 820px; background: #fff; padding: 56px 64px; font-family: "Times New Roman", Georgia, serif; font-size: 16px; line-height: 1.55; color: #111; }
+.paper h1 { font-size: 24px; margin: 0 0 6px; } .paper h2 { font-size: 17px; margin: 18px 0 6px; } .paper .meta { color: #555; font-size: 13px; margin-bottom: 16px; }
+.toolbar { position: absolute; top: 0; left: 0; right: 0; height: 34px; background: #3b3e41; color: #ddd; font-size: 13px; display: flex; align-items: center; gap: 16px; padding: 0 16px; }
+</style></head>
+<body class=""><div class="desktop"></div><div class="menubar"><span></span><b>Preview</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span></div>
+<div class="window"><div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="title">Employee_Handbook.pdf</div></div>
+<div class="content"><div class="viewer"><div class="toolbar">Employee_Handbook.pdf &nbsp; Benefits &nbsp; 100%</div><div class="paper" style="margin-top:20px"><h1>Employee Handbook</h1><div class="meta">Benefits</div><h2><span data-target>Paid Time Off</span></h2><p><span data-ok>Full-time staff earn 1.5 days of paid time off per month, up to a balance of 30 days. Unused days above the cap are forfeited on January 1.</span></p><h2>Parental Leave</h2><p>Eligible employees receive 16 weeks of paid leave.</p><h2>Remote Work</h2><p>Teams may work remotely up to three days per week.</p></div></div></div></div></body></html>
