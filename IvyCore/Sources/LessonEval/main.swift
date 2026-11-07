@@ -127,6 +127,11 @@ final class ScreenRenderer: NSObject, WKNavigationDelegate {
               if (box.width > 0 && box.height > 0) found.push([node.textContent, box.x, box.y, box.width, box.height]);
             }
           }
+          // A value in a field, like a width of 220, shows on screen but isn't a text node.
+          for (const field of document.querySelectorAll('input')) {
+            const box = field.getBoundingClientRect();
+            if (field.value && box.width > 0) found.push([field.value, box.x, box.y, box.width, box.height]);
+          }
           return found;
         })()
         """
