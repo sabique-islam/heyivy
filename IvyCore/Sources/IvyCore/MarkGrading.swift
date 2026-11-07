@@ -21,11 +21,26 @@ public struct GroundTruthBox: Sendable, Equatable, Codable {
     }
 }
 
+/// A piece of text on an evaluation screen and where it is, in sent-image pixels.
+public struct PageText: Sendable, Equatable, Codable {
+    public var text: String
+    public var rect: CGRect
+
+    public init(text: String, rect: CGRect) {
+        self.text = text
+        self.rect = rect
+    }
+}
+
 /// Where one drawn mark ended up, compared with the screen's correct targets.
 public enum MarkLanding: String, Sendable, Equatable, Codable {
     case onTarget
     case onAcceptable
     case onHostile
+    /// Not the target, but on the very words the mark names, like "May" when explaining
+    /// a dip in April and the rebound after it. A fair secondary mark, so not wrong.
+    case onWhatItNamed
+    /// On something other than what it names. This is the mark that breaks trust.
     case elsewhere
 }
 
@@ -36,14 +51,15 @@ public struct CaseGrade: Sendable, Equatable, Codable {
     public var marksOnTarget: Int
     public var marksOnAcceptable: Int
     public var marksOnHostile: Int
+    public var marksOnWhatTheyNamed: Int
     public var marksElsewhere: Int
     /// Why it failed, in plain words. Empty when it passed.
     public var failureReasons: [String]
 }
 
 /// Grades Ivy's marks against the boxes each evaluation screen says are right. It's strict
-/// on purpose: a wrong mark breaks trust more than a missing one helps, so one mark
-/// anywhere else fails the case even if another mark was right.
+/// on purpose: a wrong mark breaks trust more than a missing one helps, so one mark on
+/// something other than what it names fails the case even if another mark was right.
 public enum MarkGrading {
     /// How far outside a box a mark's center may fall and still count as on it. Text boxes
     /// from recognition run a few pixels wider or narrower than the page's own.
@@ -51,7 +67,10 @@ public enum MarkGrading {
     /// Labels are notes placed beside a spot, not on it, so they get more room.
     public static let labelTolerancePixels = 40.0
 
-    public static func landing(ofMarkBox markBox: CGRect, kind: MarkKind, groundTruth: [GroundTruthBox]) -> MarkLanding {
+    /// `namedWords` are the words a text mark asked for, and `pageTexts` every piece of text
+    /// on the screen. With them, a mark off the target can be told apart: on the words it
+    /// names, or on something else. Without them, any mark off the target is elsewhere.
+    public static func landing(ofMarkBox markBox: CGRect, kind: MarkKind, groundTruth: [GroundTruthBox], namedWords: [String] = [], pageTexts: [PageText] = []) -> MarkLanding {
         let tolerance = kind == .label ? labelTolerancePixels : tolerancePixels
         func isOn(_ box: GroundTruthBox) -> Bool {
             let markCenter = CGPoint(x: markBox.midX, y: markBox.midY)
@@ -65,7 +84,24 @@ public enum MarkGrading {
         if groundTruth.contains(where: { $0.role == .hostile && isOn($0) }) { return .onHostile }
         if groundTruth.contains(where: { $0.role == .target && isOn($0) }) { return .onTarget }
         if groundTruth.contains(where: { $0.role == .acceptable && isOn($0) }) { return .onAcceptable }
+        if isOnTheWordsItNames(markBox: markBox, namedWords: namedWords, pageTexts: pageTexts) { return .onWhatItNamed }
         return .elsewhere
+    }
+
+    /// True when text under the mark holds at least half the words the mark names.
+    static func isOnTheWordsItNames(markBox: CGRect, namedWords: [String], pageTexts: [PageText]) -> Bool {
+        let normalizedNamedWords = namedWords.map(TargetResolver.normalizedForMatching).filter { !$0.isEmpty }
+        guard !normalizedNamedWords.isEmpty else { return false }
+        let markCenter = CGPoint(x: markBox.midX, y: markBox.midY)
+        let textsUnderTheMark = pageTexts.filter { pageText in
+            pageText.rect.insetBy(dx: -tolerancePixels, dy: -tolerancePixels).contains(markCenter)
+        }
+        for pageText in textsUnderTheMark {
+            let normalizedPageText = pageText.text.lowercased()
+            let wordsFound = normalizedNamedWords.filter { normalizedPageText.contains($0) }.count
+            if wordsFound * 2 >= normalizedNamedWords.count { return true }
+        }
+        return false
     }
 
     /// A screen question passes with at least one mark on the target or an acceptable box,
@@ -75,6 +111,7 @@ public enum MarkGrading {
         let marksOnTarget = landings.filter { $0 == .onTarget }.count
         let marksOnAcceptable = landings.filter { $0 == .onAcceptable }.count
         let marksOnHostile = landings.filter { $0 == .onHostile }.count
+        let marksOnWhatTheyNamed = landings.filter { $0 == .onWhatItNamed }.count
         let marksElsewhere = landings.filter { $0 == .elsewhere }.count
         var failureReasons: [String] = []
         if expectsNoMarks {
@@ -93,6 +130,7 @@ public enum MarkGrading {
             marksOnTarget: marksOnTarget,
             marksOnAcceptable: marksOnAcceptable,
             marksOnHostile: marksOnHostile,
+            marksOnWhatTheyNamed: marksOnWhatTheyNamed,
             marksElsewhere: marksElsewhere,
             failureReasons: failureReasons
         )

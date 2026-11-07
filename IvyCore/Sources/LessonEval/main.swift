@@ -68,6 +68,9 @@ struct CaseCatalog: Decodable {
 struct RenderedScreen {
     var fullResolutionImage: CGImage
     var boxesInPoints: [GroundTruthBox]
+    /// Every piece of text on the page, so a mark off the target can be checked against
+    /// the words it names.
+    var pageTextsInPoints: [PageText]
 }
 
 /// Draws each case's page in a window that's never shown, and reads its marked boxes.
@@ -110,6 +113,30 @@ final class ScreenRenderer: NSObject, WKNavigationDelegate {
             return GroundTruthBox(role: role, rect: CGRect(x: x, y: y, width: width, height: height))
         }
 
+        // One box per line of each text node, since a long sentence wraps.
+        let textScript = """
+        (() => {
+          const found = [];
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            if (!node.textContent.trim()) continue;
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            for (const box of range.getClientRects()) {
+              if (box.width > 0 && box.height > 0) found.push([node.textContent, box.x, box.y, box.width, box.height]);
+            }
+          }
+          return found;
+        })()
+        """
+        let textValues = try await webView.evaluateJavaScript(textScript) as? [[Any]] ?? []
+        let pageTexts = textValues.compactMap { values -> PageText? in
+            guard values.count == 5, let text = values[0] as? String,
+                  let x = values[1] as? Double, let y = values[2] as? Double, let width = values[3] as? Double, let height = values[4] as? Double else { return nil }
+            return PageText(text: text, rect: CGRect(x: x, y: y, width: width, height: height))
+        }
+
         let snapshotConfiguration = WKSnapshotConfiguration()
         snapshotConfiguration.rect = CGRect(origin: .zero, size: viewportPoints)
         snapshotConfiguration.afterScreenUpdates = true
@@ -126,7 +153,7 @@ final class ScreenRenderer: NSObject, WKNavigationDelegate {
         snapshot.draw(in: CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
         NSGraphicsContext.restoreGraphicsState()
         guard let fullResolutionImage = context.makeImage() else { throw EvalError(message: "Couldn't draw the screen.") }
-        return RenderedScreen(fullResolutionImage: fullResolutionImage, boxesInPoints: boxes)
+        return RenderedScreen(fullResolutionImage: fullResolutionImage, boxesInPoints: boxes, pageTextsInPoints: pageTexts)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -166,6 +193,7 @@ struct TrialRecord: Encodable {
     var marksOnTarget: Int
     var marksOnAcceptable: Int
     var marksOnHostile: Int
+    var marksOnWhatTheyNamed: Int
     var marksElsewhere: Int
     var firstTextMilliseconds: Int?
     var totalMilliseconds: Int
@@ -275,9 +303,11 @@ final class EvalController: NSObject, NSApplicationDelegate {
     private func runTrial(evalCase: EvalCase, trial: Int, rendered: RenderedScreen, viewportPoints: CGSize, sentImageSize: CGSize, deviceToken: String) async -> TrialRecord {
         let startUptime = ProcessInfo.processInfo.systemUptime
         let pixelsPerSentPixel = sentImageSize.width / viewportPoints.width
-        let groundTruth = rendered.boxesInPoints.map { box in
-            GroundTruthBox(role: box.role, rect: CGRect(x: box.rect.minX * pixelsPerSentPixel, y: box.rect.minY * pixelsPerSentPixel, width: box.rect.width * pixelsPerSentPixel, height: box.rect.height * pixelsPerSentPixel))
+        func inSentPixels(_ rect: CGRect) -> CGRect {
+            CGRect(x: rect.minX * pixelsPerSentPixel, y: rect.minY * pixelsPerSentPixel, width: rect.width * pixelsPerSentPixel, height: rect.height * pixelsPerSentPixel)
         }
+        let groundTruth = rendered.boxesInPoints.map { GroundTruthBox(role: $0.role, rect: inSentPixels($0.rect)) }
+        let pageTexts = rendered.pageTextsInPoints.map { PageText(text: $0.text, rect: inSentPixels($0.rect)) }
         guard let sentImage = Self.shrink(rendered.fullResolutionImage, to: sentImageSize),
               let jpegData = NSBitmapImageRep(cgImage: sentImage).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
             return Self.errorRecord(evalCase: evalCase, trial: trial, error: "couldn't make the screenshot")
@@ -332,7 +362,9 @@ final class EvalController: NSObject, NSApplicationDelegate {
                 drawnBox = nil
             }
             if let drawnBox {
-                let landing = MarkGrading.landing(ofMarkBox: drawnBox, kind: markRequest.kind, groundTruth: groundTruth)
+                var namedWords: [String] = []
+                if case .visibleText(let words) = markRequest.target { namedWords = words }
+                let landing = MarkGrading.landing(ofMarkBox: drawnBox, kind: markRequest.kind, groundTruth: groundTruth, namedWords: namedWords, pageTexts: pageTexts)
                 markRecord.landing = landing.rawValue
                 landings.append(landing)
                 drawnBoxes.append((drawnBox, landing))
@@ -354,7 +386,7 @@ final class EvalController: NSObject, NSApplicationDelegate {
             passed: grade.passed, failureReasons: grade.failureReasons, spokenText: spokenText, marks: markRecords,
             droppedByParser: scriptParser.droppedMarks.map { "\($0)" },
             drawnMarkCount: grade.drawnMarkCount, marksOnTarget: grade.marksOnTarget, marksOnAcceptable: grade.marksOnAcceptable,
-            marksOnHostile: grade.marksOnHostile, marksElsewhere: grade.marksElsewhere,
+            marksOnHostile: grade.marksOnHostile, marksOnWhatTheyNamed: grade.marksOnWhatTheyNamed, marksElsewhere: grade.marksElsewhere,
             firstTextMilliseconds: firstTextMilliseconds,
             totalMilliseconds: Int(((ProcessInfo.processInfo.systemUptime - startUptime) * 1000).rounded()),
             inputTokens: usage.input, outputTokens: usage.output,
@@ -373,7 +405,7 @@ final class EvalController: NSObject, NSApplicationDelegate {
     private static func errorRecord(evalCase: EvalCase, trial: Int, error: String) -> TrialRecord {
         TrialRecord(caseID: evalCase.id, category: evalCase.category, split: evalCase.split, trial: trial, question: evalCase.question,
                     passed: false, failureReasons: [error], spokenText: "", marks: [], droppedByParser: [], drawnMarkCount: 0,
-                    marksOnTarget: 0, marksOnAcceptable: 0, marksOnHostile: 0, marksElsewhere: 0, firstTextMilliseconds: nil,
+                    marksOnTarget: 0, marksOnAcceptable: 0, marksOnHostile: 0, marksOnWhatTheyNamed: 0, marksElsewhere: 0, firstTextMilliseconds: nil,
                     totalMilliseconds: 0, inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0, recognizedWordCount: 0, error: error)
     }
 
@@ -386,7 +418,8 @@ final class EvalController: NSObject, NSApplicationDelegate {
 
     /// The screen Claude saw, with the right boxes in green (target), blue (also fine) and
     /// red (hostile), Claude's rough positions as small crosses, and each drawn mark in
-    /// yellow when it landed right and magenta when it didn't.
+    /// yellow when it landed right, gray when it's on what it named but not the target,
+    /// and magenta when it's wrong.
     private func writeReviewImage(sentImage: CGImage, groundTruth: [GroundTruthBox], drawnBoxes: [(box: CGRect, landing: MarkLanding)], roughPositions: [CGPoint], name: String) {
         let width = sentImage.width
         let height = sentImage.height
@@ -405,8 +438,11 @@ final class EvalController: NSObject, NSApplicationDelegate {
         }
         context.setLineWidth(3)
         for drawn in drawnBoxes {
-            let isRight = drawn.landing == .onTarget || drawn.landing == .onAcceptable
-            context.setStrokeColor(isRight ? CGColor(srgbRed: 1, green: 0.79, blue: 0.24, alpha: 1) : CGColor(srgbRed: 1, green: 0, blue: 0.8, alpha: 1))
+            switch drawn.landing {
+            case .onTarget, .onAcceptable: context.setStrokeColor(CGColor(srgbRed: 1, green: 0.79, blue: 0.24, alpha: 1))
+            case .onWhatItNamed: context.setStrokeColor(CGColor(srgbRed: 0.6, green: 0.6, blue: 0.6, alpha: 1))
+            case .onHostile, .elsewhere: context.setStrokeColor(CGColor(srgbRed: 1, green: 0, blue: 0.8, alpha: 1))
+            }
             context.stroke(flipped(drawn.box.insetBy(dx: -3, dy: -3)))
         }
         context.setStrokeColor(CGColor(srgbRed: 1, green: 0.4, blue: 0, alpha: 1))
@@ -462,8 +498,8 @@ final class EvalController: NSObject, NSApplicationDelegate {
         lines.append("")
         lines.append("Split \(runInfo["split"] ?? ""), \(runInfo["trials"] ?? 1) trial(s) per case, prompt \(runInfo["promptSHA256Prefix"] ?? ""), model \(runInfo["modelNote"] ?? ""), \(runInfo["date"] ?? "").")
         lines.append("")
-        lines.append("| Screen type | Trials | Passed | Any mark drawn | Hit the target | Trials with a wrong mark | Wrong marks / drawn | Dropped marks |")
-        lines.append("|---|---|---|---|---|---|---|---|")
+        lines.append("| Screen type | Trials | Passed | Any mark drawn | Hit the target | Trials with a wrong mark | Wrong marks / drawn | Secondary marks | Dropped marks |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
         let categories = Array(Set(records.map(\.category))).sorted()
         for category in categories + ["All"] {
             let rows = category == "All" ? records : records.filter { $0.category == category }
@@ -472,8 +508,10 @@ final class EvalController: NSObject, NSApplicationDelegate {
             let dropped = rows.map { $0.marks.filter { $0.outcome.hasPrefix("dropped") }.count + $0.droppedByParser.count }.reduce(0, +)
             let requested = rows.map { $0.marks.count + $0.droppedByParser.count }.reduce(0, +)
             let screenRows = rows.filter { !$0.question.isEmpty && $0.category != "not about the screen" }
+            let secondary = rows.map(\.marksOnWhatTheyNamed).reduce(0, +)
             let name = category == "All" ? "**All**" : category
-            lines.append("| \(name) | \(rows.count) | \(percent(rows.filter(\.passed).count, rows.count)) | \(percent(rows.filter { $0.drawnMarkCount > 0 }.count, rows.count)) | \(percent(screenRows.filter { $0.marksOnTarget > 0 }.count, screenRows.count)) | \(percent(rows.filter { $0.marksElsewhere + $0.marksOnHostile > 0 }.count, rows.count)) | \(percent(wrong, drawn)) | \(dropped) of \(requested) |")
+            let hitTarget = screenRows.filter { $0.marksOnTarget + $0.marksOnAcceptable > 0 }.count
+            lines.append("| \(name) | \(rows.count) | \(percent(rows.filter(\.passed).count, rows.count)) | \(percent(rows.filter { $0.drawnMarkCount > 0 }.count, rows.count)) | \(percent(hitTarget, screenRows.count)) | \(percent(rows.filter { $0.marksElsewhere + $0.marksOnHostile > 0 }.count, rows.count)) | \(percent(wrong, drawn)) | \(secondary) | \(dropped) of \(requested) |")
         }
         let firstTextTimes = records.compactMap(\.firstTextMilliseconds)
         let cost = records.map(\.estimatedCostUSD).reduce(0, +)

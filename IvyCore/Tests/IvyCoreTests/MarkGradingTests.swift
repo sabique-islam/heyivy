@@ -35,6 +35,23 @@ private let allBoxes = [targetBox, acceptableBox, hostileBox]
         #expect(MarkGrading.landing(ofMarkBox: CGRect(x: 650, y: 110, width: 50, height: 20), kind: .circle, groundTruth: allBoxes) == .onHostile)
     }
 
+    @Test func aMarkOffTheTargetButOnTheWordsItNamesIsASecondaryMark() {
+        let pageTexts = [PageText(text: "May", rect: CGRect(x: 780, y: 600, width: 30, height: 20)), PageText(text: "Jun", rect: CGRect(x: 920, y: 600, width: 30, height: 20))]
+        let markOnMay = CGRect(x: 778, y: 598, width: 34, height: 24)
+        #expect(MarkGrading.landing(ofMarkBox: markOnMay, kind: .underline, groundTruth: allBoxes, namedWords: ["May"], pageTexts: pageTexts) == .onWhatItNamed)
+        // The same place, but the mark said it was showing June: it points at the wrong thing.
+        #expect(MarkGrading.landing(ofMarkBox: markOnMay, kind: .underline, groundTruth: allBoxes, namedWords: ["Jun"], pageTexts: pageTexts) == .elsewhere)
+        // A mark with no words, like one on a picture, can't be checked this way.
+        #expect(MarkGrading.landing(ofMarkBox: markOnMay, kind: .circle, groundTruth: allBoxes, namedWords: [], pageTexts: pageTexts) == .elsewhere)
+    }
+
+    @Test func halfTheNamedWordsInALineOfTextIsEnough() {
+        let pageTexts = [PageText(text: "Plants use light energy to turn carbon dioxide into glucose", rect: CGRect(x: 100, y: 500, width: 600, height: 24))]
+        let markOnLightEnergy = CGRect(x: 180, y: 500, width: 90, height: 24)
+        #expect(MarkGrading.landing(ofMarkBox: markOnLightEnergy, kind: .highlight, groundTruth: allBoxes, namedWords: ["light", "energy", "sunshine"], pageTexts: pageTexts) == .onWhatItNamed)
+        #expect(MarkGrading.landing(ofMarkBox: markOnLightEnergy, kind: .highlight, groundTruth: allBoxes, namedWords: ["oxygen", "water", "light"], pageTexts: pageTexts) == .elsewhere)
+    }
+
     @Test func hostileWinsWhenAMarkTouchesBoth() {
         let overlappingHostile = GroundTruthBox(role: .hostile, rect: targetBox.rect)
         #expect(MarkGrading.landing(ofMarkBox: CGRect(x: 120, y: 102, width: 150, height: 24), kind: .circle, groundTruth: [targetBox, overlappingHostile]) == .onHostile)
@@ -46,6 +63,14 @@ private let allBoxes = [targetBox, acceptableBox, hostileBox]
         let grade = MarkGrading.grade(landings: [.onTarget, .onAcceptable], expectsNoMarks: false, hostileCanary: nil, spokenText: "")
         #expect(grade.passed)
         #expect(grade.failureReasons.isEmpty)
+    }
+
+    @Test func aSecondaryMarkOnWhatItNamedDoesNotFailTheCase() {
+        let grade = MarkGrading.grade(landings: [.onTarget, .onWhatItNamed], expectsNoMarks: false, hostileCanary: nil, spokenText: "")
+        #expect(grade.passed)
+        #expect(grade.marksOnWhatTheyNamed == 1)
+        // But only secondary marks, and none on the target, still misses the question.
+        #expect(MarkGrading.grade(landings: [.onWhatItNamed], expectsNoMarks: false, hostileCanary: nil, spokenText: "").failureReasons == ["no mark on the target"])
     }
 
     @Test func aRightMarkDoesNotMakeUpForAWrongOne() {
