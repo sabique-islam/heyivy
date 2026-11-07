@@ -1,5 +1,6 @@
 import AppKit
 import IvyCore
+import IvyLesson
 import IvyOverlay
 import ScreenCaptureKit
 
@@ -9,11 +10,14 @@ import ScreenCaptureKit
 //   - marks draw over a full-screen app, on every screen
 //   - Ivy's own screen capture leaves them out, while a normal capture shows them
 //   - the overlay uses next to no CPU while marks sit still
+//   - marks fade when the screen under them scrolls, and not when it doesn't (D5)
 //
 //   --script PATH       Marks to draw. Default: Examples/overlay-demo.json
 //   --reduce-motion     Draw without animation, as the Reduce Motion setting does
 //   --no-full-screen    Keep the test card in a normal window
 //   --check-capture     Capture the screen to check marks are left out. Needs Screen Recording.
+//   --check-staleness   Tint a tile, then scroll the card, and time how fast marks fade.
+//                       Needs Screen Recording.
 //   --result PATH       Where to write the JSON result
 //
 // Run it with scripts/mark-overlay-lab.sh.
@@ -23,6 +27,7 @@ struct LabOptions {
     var reduceMotion = false
     var useFullScreen = true
     var checkCapture = false
+    var checkStaleness = false
     var resultPath = FileManager.default.temporaryDirectory.appendingPathComponent("mark-overlay-lab-result.json").path
 
     init(arguments: [String]) {
@@ -35,6 +40,7 @@ struct LabOptions {
             case "--reduce-motion": reduceMotion = true
             case "--no-full-screen": useFullScreen = false
             case "--check-capture": checkCapture = true
+            case "--check-staleness": checkStaleness = true
             default: break
             }
             argumentIndex += 1
@@ -112,12 +118,24 @@ struct TestCardTile {
 }
 
 final class TestCardView: NSView {
+    /// Moves everything up by this many points, as scrolling down a page would.
+    var scrolledPoints: CGFloat = 0 { didSet { needsDisplay = true } }
+    /// Darkens one tile's background without moving anything, like a hover highlight.
+    var tintedTileIndex: Int? { didSet { needsDisplay = true } }
+
     override func draw(_ dirtyRect: NSRect) {
+        NSColor.black.setFill()
+        bounds.fill()
+        NSGraphicsContext.current?.cgContext.translateBy(x: 0, y: scrolledPoints)
         for (tileIndex, tile) in TestCardTile.all.enumerated() {
             let tileRect = TestCardTile.tileRect(index: tileIndex, in: bounds)
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: tileRect).addClip()
             tile.draw(tileRect)
+            if tintedTileIndex == tileIndex {
+                NSColor(white: 0, alpha: 0.15).setFill()
+                tileRect.fill(using: .sourceAtop)
+            }
             NSGraphicsContext.restoreGraphicsState()
 
             let wordRect = TestCardTile.wordRect(index: tileIndex, in: bounds)
@@ -201,6 +219,13 @@ final class LabController: NSObject, NSApplicationDelegate {
         }
 
         let lastMarkSeconds = script.marks.map(\.atSeconds).max() ?? 0
+        if options.checkStaleness {
+            // Staleness changes the card, so it runs on its own, after every mark is up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + lastMarkSeconds + 1.0) {
+                Task { @MainActor in await self.checkStaleness() }
+            }
+            return
+        }
         if options.checkCapture {
             DispatchQueue.main.asyncAfter(deadline: .now() + min(lastMarkSeconds, 3.0) + 0.6) {
                 Task { @MainActor in await self.checkScreenCapture() }
@@ -281,6 +306,90 @@ final class LabController: NSObject, NSApplicationDelegate {
             }
         }
         return markColoredPixels
+    }
+
+    private var stalenessWatcher: MarkStalenessWatcher?
+    private var staleMarkReports: [(markID: Int, uptimeSeconds: Double)] = []
+
+    /// Three phases on the first screen. The card sits still, then one tile is tinted, and
+    /// neither should fade anything. Then the card scrolls by half a tile, and every mark
+    /// should fade within 500 ms.
+    @MainActor
+    private func checkStaleness() async {
+        guard let cardWindow = testCardWindows.first, let cardView = cardWindow.contentView as? TestCardView,
+              let screen = cardWindow.screen else {
+            finish(withError: "No test card to check.")
+            return
+        }
+        let baselineImage: CGImage
+        do {
+            let shareableContent = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let screenNumber = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            guard let display = shareableContent.displays.first(where: { $0.displayID == screenNumber }) else {
+                finish(withError: "The test card's display isn't available to capture.")
+                return
+            }
+            let overlayWindowNumbers = Set(markOverlay.overlayWindowNumbers)
+            let overlayWindows = shareableContent.windows.filter { overlayWindowNumbers.contains(Int($0.windowID)) }
+            let configuration = SCStreamConfiguration()
+            configuration.width = display.width * Int(screen.backingScaleFactor)
+            configuration.height = display.height * Int(screen.backingScaleFactor)
+            configuration.showsCursor = false
+            baselineImage = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: overlayWindows), configuration: configuration)
+        } catch {
+            finish(withError: "Couldn't capture the screen: \(error.localizedDescription). Screen Recording may not be allowed for the lab.")
+            return
+        }
+
+        let geometry = CapturedScreenGeometry(
+            imagePixelSize: CGSize(width: baselineImage.width, height: baselineImage.height),
+            screenFrameInGlobalPoints: screen.frame
+        )
+        let watcher = MarkStalenessWatcher(
+            baselineImage: baselineImage,
+            geometry: geometry,
+            pointerLocationInGlobalPoints: nil,
+            windowNumbersToLeaveOut: markOverlay.overlayWindowNumbers
+        )
+        watcher.onMarkStale = { [weak self] markID in
+            self?.staleMarkReports.append((markID, ProcessInfo.processInfo.systemUptime))
+        }
+        stalenessWatcher = watcher
+
+        // Every tile with a word, whether or not the script marked it, so the check covers
+        // all twelve backgrounds.
+        let tileIndices = Array(TestCardTile.all.indices)
+        for tileIndex in tileIndices {
+            let wordRectGlobal = cardWindow.convertToScreen(cardView.convert(TestCardTile.wordRect(index: tileIndex, in: cardView.bounds), to: nil))
+            watcher.watch(markID: tileIndex, regionInImagePixels: geometry.imagePixelRect(fromGlobalRect: wordRectGlobal))
+        }
+
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        let fadesWhileStill = staleMarkReports.map(\.markID)
+
+        cardView.tintedTileIndex = 0
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        let fadesAfterTint = staleMarkReports.map(\.markID).filter { !fadesWhileStill.contains($0) }
+
+        let tileHeight = cardView.bounds.height / Double(TestCardTile.rowCount)
+        let scrollUptimeSeconds = ProcessInfo.processInfo.systemUptime
+        cardView.scrolledPoints = tileHeight / 2
+        cardView.displayIfNeeded()
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        let fadesAfterScroll = staleMarkReports.filter { $0.uptimeSeconds >= scrollUptimeSeconds }
+        let fadeMillisecondsAfterScroll = fadesAfterScroll.map { Int((($0.uptimeSeconds - scrollUptimeSeconds) * 1000).rounded()) }
+        watcher.stopAll()
+
+        result["stalenessCheck"] = [
+            "regionsWatched": tileIndices.count,
+            "fadedWhileStill": fadesWhileStill.map { TestCardTile.all[$0].backgroundName },
+            "fadedAfterTintingTheWhiteTile": fadesAfterTint.map { TestCardTile.all[$0].backgroundName },
+            "fadedAfterScroll": fadesAfterScroll.count,
+            "notFadedAfterScroll": tileIndices.filter { tileIndex in !fadesAfterScroll.contains { $0.markID == tileIndex } }.map { TestCardTile.all[$0].backgroundName },
+            "fadeMillisecondsAfterScroll": fadeMillisecondsAfterScroll.sorted(),
+            "slowestFadeMilliseconds": fadeMillisecondsAfterScroll.max() ?? -1,
+        ] as [String: Any]
+        finish(withError: nil)
     }
 
     private func finish(withError errorMessage: String?) {

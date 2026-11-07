@@ -92,16 +92,12 @@ public enum ClaudeScriptStream {
         }
     }
 
-    /// The Worker's error shape is `{"error":{"code": ...}}`, so the code says which 429 it is.
     static func failure(forStatusCode statusCode: Int, errorBody: String) -> LessonFailure {
-        switch statusCode {
-        case 401: return .notAuthorized
-        case 429: return errorBody.contains("spend_limit_reached") ? .spendLimitReached : .rateLimited
-        case 504: return .answerTimedOut
-        default: return .answerFailed
-        }
+        if statusCode == 504 { return .answerTimedOut }
+        return WorkerRefusal.failure(forStatusCode: statusCode, errorBody: errorBody) ?? .answerFailed
     }
 }
+
 
 /// One lesson's speech over the Worker's `/voice` WebSocket. Text goes in as Claude writes
 /// it, audio comes back into the player, and character timings build the speech timeline.

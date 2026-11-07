@@ -11,11 +11,15 @@ public struct LessonScreen {
     public var fullResolutionImage: CGImage
     /// Maps the sent image's pixels to screen points.
     public var geometry: CapturedScreenGeometry
+    /// Where the pointer was when the screen was captured, in AppKit screen points. The
+    /// pointer is in the capture, so marks ignore that spot when watching for changes.
+    public var pointerLocationInGlobalPoints: CGPoint?
 
-    public init(screenshotJPEGData: Data, fullResolutionImage: CGImage, geometry: CapturedScreenGeometry) {
+    public init(screenshotJPEGData: Data, fullResolutionImage: CGImage, geometry: CapturedScreenGeometry, pointerLocationInGlobalPoints: CGPoint? = nil) {
         self.screenshotJPEGData = screenshotJPEGData
         self.fullResolutionImage = fullResolutionImage
         self.geometry = geometry
+        self.pointerLocationInGlobalPoints = pointerLocationInGlobalPoints
     }
 }
 
@@ -43,6 +47,26 @@ public final class LessonEngine {
     public var onFirstAudioHeard: (() -> Void)?
     public var onFinished: (() -> Void)?
     public var onFailed: ((LessonFailure) -> Void)?
+    /// Each piece of speech as Claude writes it, so the answer can be shown as text if the
+    /// voice fails.
+    public var onSpeechTextAdded: ((String) -> Void)?
+    /// Called once the whole script has arrived. `wasCutOff` is true when it broke off early.
+    /// Speech may still be playing.
+    public var onScriptFinished: ((_ wasCutOff: Bool) -> Void)?
+
+    /// Lets a lab make the voice fail on purpose, to check what the user is told. The app
+    /// never sets it.
+    public enum VoiceFailureForTesting {
+        case none
+        case atStart
+        case afterFirstAudio(seconds: Double)
+    }
+    public var voiceFailureForTesting = VoiceFailureForTesting.none
+    /// True once the whole script has arrived, or broke off. The voice can fail after this,
+    /// and then the answer shown as text is already complete.
+    public private(set) var hasScriptFinished = false
+    /// True once speech has been heard and before it finished, failed or was cancelled.
+    public var isSpeaking: Bool { hasHeardFirstAudio && !hasFinished && !voiceHasFailed && !isCancelled }
 
     public private(set) var spokenText = ""
     public private(set) var markOutcomes: [MarkOutcome] = []
@@ -64,6 +88,10 @@ public final class LessonEngine {
     private var scriptTask: Task<Void, Never>?
     private var displayLink: CADisplayLink?
     private var displayLinkTarget: DisplayLinkTarget?
+    /// Fades marks whose content changed. Off for labs that draw over a picture of a screen
+    /// rather than the real one.
+    private let watchesScreenForChanges: Bool
+    private var markStalenessWatcher: MarkStalenessWatcher?
 
     private var screen: LessonScreen?
     private var recognizedWords: [RecognizedWord]?
@@ -71,10 +99,13 @@ public final class LessonEngine {
     private var hasHeardFirstAudio = false
     private var hasFinished = false
     private var isCancelled = false
+    /// Once the voice fails, the script keeps streaming so the answer can be read instead.
+    private var voiceHasFailed = false
 
     /// Call when the key goes down, so the voice connection is ready by the time the script is.
     /// It only opens the network connection. Audio output starts in `run`, once the mic is done.
-    public init(workerBaseURL: String, deviceToken: String, markOverlay: MarkOverlayController, outputDevice: AudioDevice? = nil, timingLog: LessonTimingLog = LessonTimingLog()) {
+    public init(workerBaseURL: String, deviceToken: String, markOverlay: MarkOverlayController, outputDevice: AudioDevice? = nil, timingLog: LessonTimingLog = LessonTimingLog(), watchesScreenForChanges: Bool = true) {
+        self.watchesScreenForChanges = watchesScreenForChanges
         self.workerBaseURL = workerBaseURL
         self.deviceToken = deviceToken
         self.markOverlay = markOverlay
@@ -102,8 +133,13 @@ public final class LessonEngine {
         timingLog.record("question sent")
 
         startTextRecognition(on: screen)
-        startSpeechPlayer(attemptsRemaining: Self.speechPlayerStartAttempts)
+        if case .atStart = voiceFailureForTesting {
+            DispatchQueue.main.async { [weak self] in self?.fail(with: .voiceFailed) }
+        } else {
+            startSpeechPlayer(attemptsRemaining: Self.speechPlayerStartAttempts)
+        }
         startDisplayLink()
+        if watchesScreenForChanges { startWatchingForStaleMarks(on: screen) }
 
         scriptTask = Task { [weak self] in
             guard let self else { return }
@@ -119,10 +155,18 @@ public final class LessonEngine {
                 handle(scriptParser.finish())
                 timingLog.record("script finished")
                 voiceStream.finishText()
+                hasScriptFinished = true
+                onScriptFinished?(false)
             } catch let lessonFailure as LessonFailureError {
+                guard !isCancelled else { return }
+                hasScriptFinished = true
+                onScriptFinished?(true)
                 fail(with: lessonFailure.failure)
             } catch {
-                if !isCancelled { fail(with: .answerFailed) }
+                guard !isCancelled else { return }
+                hasScriptFinished = true
+                onScriptFinished?(true)
+                fail(with: .answerFailed)
             }
         }
     }
@@ -134,7 +178,7 @@ public final class LessonEngine {
     private static let speechPlayerRetryDelaySeconds = 0.3
 
     private func startSpeechPlayer(attemptsRemaining: Int) {
-        guard !isCancelled, !hasFinished else { return }
+        guard !isCancelled, !hasFinished, !voiceHasFailed else { return }
         do {
             let newSpeechPlayer = try StreamingSpeechPlayer(outputDevice: outputDevice)
             newSpeechPlayer.onPlaybackFailed = { [weak self] in self?.fail(with: .voiceFailed) }
@@ -152,9 +196,20 @@ public final class LessonEngine {
         }
     }
 
+    /// Stops speech at once. The script keeps streaming.
+    public func stopAudio() {
+        speechPlayer?.stop()
+    }
+
+    /// No more marks appear. Those showing stay until they fade or are cleared.
+    public func stopNewMarks() {
+        stopDisplayLink()
+    }
+
     /// Stops speech at once, then everything else. Marks clear immediately.
     public func cancel() {
         isCancelled = true
+        markStalenessWatcher?.stopAll()
         speechPlayer?.stop()
         voiceStream.close()
         scriptTask?.cancel()
@@ -168,7 +223,8 @@ public final class LessonEngine {
             case .speech(let speechText):
                 if spokenText.isEmpty { timingLog.record("first speech sent to voice") }
                 spokenText += speechText
-                voiceStream.send(speechText: speechText)
+                onSpeechTextAdded?(speechText)
+                if !voiceHasFailed { voiceStream.send(speechText: speechText) }
             case .mark(let markRequest):
                 requestedMarks.append(markRequest)
                 // Only text marks need text recognition. Others are placed by position.
@@ -249,18 +305,27 @@ public final class LessonEngine {
             hasHeardFirstAudio = true
             timingLog.record("first audio heard")
             onFirstAudioHeard?()
+            if case .afterFirstAudio(let seconds) = voiceFailureForTesting {
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in self?.fail(with: .voiceFailed) }
+            }
         }
 
         let timelineUpdate = markTimeline.update(heardContentSeconds: heardContentSeconds, speechTimeline: voiceStream.speechTimeline)
         for markToShow in timelineUpdate.marksToShow {
             markOverlay.show(markID: markToShow.markIndex, kind: markToShow.payload.kind, globalRect: markToShow.payload.globalRect, labelText: markToShow.payload.labelText)
             timingLog.record("mark \(markToShow.markIndex) shown")
+            if let targetBox = resolvedBoxesInImagePixels[markToShow.markIndex] {
+                markStalenessWatcher?.watch(markID: markToShow.markIndex, regionInImagePixels: targetBox)
+            }
             if let outcomeIndex = markOutcomes.firstIndex(where: { $0.markIndex == markToShow.markIndex }) {
                 markOutcomes[outcomeIndex].shownAtHeardSeconds = heardContentSeconds
                 markOutcomes[outcomeIndex].wordStartSeconds = markToShow.startSeconds
             }
         }
-        for fadedMarkIndex in timelineUpdate.marksToFade { markOverlay.fade(markID: fadedMarkIndex) }
+        for fadedMarkIndex in timelineUpdate.marksToFade {
+            markOverlay.fade(markID: fadedMarkIndex)
+            markStalenessWatcher?.stopWatching(markID: fadedMarkIndex)
+        }
         for lateMarkIndex in timelineUpdate.marksDroppedAsLate {
             timingLog.record("mark \(lateMarkIndex) dropped (too late for its words)")
             if let outcomeIndex = markOutcomes.firstIndex(where: { $0.markIndex == lateMarkIndex }) {
@@ -273,17 +338,51 @@ public final class LessonEngine {
             timingLog.record("speech finished")
             stopDisplayLink()
             // Marks stay a few seconds after the lesson, then fade.
-            markOverlay.fadeAll(afterSeconds: 3)
+            markOverlay.fadeAll(afterSeconds: Self.secondsMarksStayAfterSpeech)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.secondsMarksStayAfterSpeech) { [weak self] in
+                self?.markStalenessWatcher?.stopAll()
+            }
             onFinished?()
         }
     }
 
+    /// Every failure is reported once. After the voice fails, the script carries on so the
+    /// answer can be shown as text. Any other failure ends the lesson.
     private func fail(with failure: LessonFailure) {
         guard !hasFinished, !isCancelled else { return }
         timingLog.record("failed: \(failure)")
-        hasFinished = true
         stopDisplayLink()
+        if failure == .voiceFailed {
+            guard !voiceHasFailed else { return }
+            voiceHasFailed = true
+            speechPlayer?.stop()
+            voiceStream.close()
+        } else {
+            hasFinished = true
+        }
         onFailed?(failure)
+    }
+
+    private static let secondsMarksStayAfterSpeech = 3.0
+
+    private func startWatchingForStaleMarks(on screen: LessonScreen) {
+        let watcher = MarkStalenessWatcher(
+            baselineImage: screen.fullResolutionImage,
+            geometry: screen.geometry,
+            pointerLocationInGlobalPoints: screen.pointerLocationInGlobalPoints
+        )
+        watcher.onMarkStale = { [weak self] markID in
+            guard let self, !self.isCancelled else { return }
+            self.timingLog.record("mark \(markID) faded (screen changed)")
+            self.markOverlay.fade(markID: markID)
+        }
+        watcher.onFrontAppChanged = { [weak self] in
+            guard let self, !self.isCancelled else { return }
+            self.timingLog.record("marks faded (another app came forward)")
+            self.markOverlay.fadeAll(afterSeconds: 0)
+            self.markStalenessWatcher?.stopAll()
+        }
+        markStalenessWatcher = watcher
     }
 
     private func startDisplayLink() {

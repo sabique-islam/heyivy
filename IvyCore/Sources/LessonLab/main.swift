@@ -13,8 +13,13 @@ import IvyOverlay
 //
 //   --question TEXT   What to ask. Default: why the average is wrong.
 //   --result PATH     Where to write the JSON result.
+//   --force FAILURE   Make one thing fail, and report what the user would be told (D5):
+//                     not-authorized, offline, voice-at-start, or voice-midway.
+//   --interrupts N    Start N lessons and cancel each at a random moment, some while
+//                     thinking and some while speaking, and time how fast each goes quiet.
 //
-// Run it with scripts/lesson-lab.sh. Each run costs a few cents.
+// Run it with scripts/lesson-lab.sh. Each run costs a few cents, and --interrupts costs
+// about a cent per lesson.
 
 let codeWithABug = """
 def average_scores(scores):
@@ -30,6 +35,8 @@ print(average_scores([90, 80, 70]))   # prints 56.67, not 80
 struct LabOptions {
     var question = "Why does this print 56.67 instead of 80?"
     var resultPath = FileManager.default.temporaryDirectory.appendingPathComponent("lesson-lab-result.json").path
+    var forcedFailure: String?
+    var interruptCount = 0
 
     init(arguments: [String]) {
         var argumentIndex = 1
@@ -38,6 +45,8 @@ struct LabOptions {
             switch arguments[argumentIndex] {
             case "--question": question = nextValue; argumentIndex += 1
             case "--result": resultPath = nextValue; argumentIndex += 1
+            case "--force": forcedFailure = nextValue; argumentIndex += 1
+            case "--interrupts": interruptCount = Int(nextValue) ?? 20; argumentIndex += 1
             default: break
             }
             argumentIndex += 1
@@ -101,17 +110,134 @@ final class LabController: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 150) { [weak self] in self?.finish(withError: "Timed out.") }
     }
 
+    private static let workerBaseURL = "https://secrets.worker.ivy.ivyx.me"
+    /// The same state machine the app uses, fed what the engine reports, so the lab can say
+    /// what the user would see.
+    private var lessonStateMachine = LessonStateMachine()
+    private var messagesShown: [String] = []
+    private var failuresReported: [String] = []
+    private var answerWasShownAsText = false
+
     private func startLesson(on screen: NSScreen, deviceToken: String) {
+        if options.interruptCount > 0 {
+            runInterrupts(on: screen, deviceToken: deviceToken, lessonsLeft: options.interruptCount)
+            return
+        }
+        var workerBaseURL = Self.workerBaseURL
+        var lessonDeviceToken = deviceToken
+        switch options.forcedFailure {
+        case "not-authorized": lessonDeviceToken = "ivy1.not-a-real-device.0.not-a-real-signature"
+        // .invalid never resolves, which is what being offline looks like to the app.
+        case "offline": workerBaseURL = "https://ivy-offline-check.invalid"
+        default: break
+        }
         let timingLog = LessonTimingLog()
-        let engine = LessonEngine(workerBaseURL: "https://secrets.worker.ivy.ivyx.me", deviceToken: deviceToken, markOverlay: markOverlay, timingLog: timingLog)
+        let engine = LessonEngine(workerBaseURL: workerBaseURL, deviceToken: lessonDeviceToken, markOverlay: markOverlay, timingLog: timingLog, watchesScreenForChanges: false)
+        switch options.forcedFailure {
+        case "voice-at-start": engine.voiceFailureForTesting = .atStart
+        case "voice-midway": engine.voiceFailureForTesting = .afterFirstAudio(seconds: 1.5)
+        default: break
+        }
         lessonEngine = engine
         guard let lessonScreen = renderScreenshot(of: screen) else { return finish(withError: "Couldn't draw the screenshot.") }
         timingLog.record("screen captured")
+
+        _ = lessonStateMachine.handle(.keyPressed)
+        let lessonID = lessonStateMachine.currentLessonID
+        _ = lessonStateMachine.handle(.keyReleased(transcriptIsEmpty: false))
+        engine.onFirstAudioHeard = { [weak self] in _ = self?.lessonStateMachine.handle(.firstAudioPlayed(lessonID)) }
         engine.onFinished = { [weak self] in
+            _ = self?.lessonStateMachine.handle(.speechFinished(lessonID))
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self?.finish(withError: nil) }
         }
-        engine.onFailed = { [weak self] failure in self?.finish(withError: "Lesson failed: \(failure)") }
+        engine.onScriptFinished = { [weak self] _ in
+            guard let self, self.answerWasShownAsText else { return }
+            // The answer is all there as text, which is the end of a lesson whose voice failed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.finish(withError: nil) }
+        }
+        engine.onFailed = { [weak self] failure in
+            guard let self else { return }
+            self.failuresReported.append("\(failure)")
+            let effects = self.lessonStateMachine.handle(.failed(lessonID, failure))
+            for effect in effects {
+                switch effect {
+                case .showMessage(let userMessage): self.messagesShown.append(userMessage.text)
+                case .showAnswerAsText:
+                    self.answerWasShownAsText = true
+                    // The voice can fail after the whole script arrived.
+                    if self.lessonEngine?.hasScriptFinished == true {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.finish(withError: nil) }
+                    }
+                case .stopAudio: self.lessonEngine?.stopAudio()
+                case .stopNewMarks: self.lessonEngine?.stopNewMarks()
+                case .cancelLessonWork: self.lessonEngine?.cancel()
+                case .clearMarks: self.markOverlay.clearAll()
+                default: break
+                }
+            }
+            // A failure that stops everything ends the run. After a voice failure, the
+            // answer keeps coming as text, so the run waits for the script to finish.
+            if effects.contains(.cancelLessonWork(lessonID)) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.finish(withError: nil) }
+            }
+        }
         engine.run(question: options.question, screen: lessonScreen, history: [])
+    }
+
+    private var interruptReports: [[String: Any]] = []
+
+    /// Each lesson is cancelled after a random wait. Cancelling must stop speech and clear
+    /// marks at once, and nothing from a cancelled lesson may happen afterwards.
+    private func runInterrupts(on screen: NSScreen, deviceToken: String, lessonsLeft: Int) {
+        guard lessonsLeft > 0 else {
+            let cancelMilliseconds = interruptReports.compactMap { $0["cancelMs"] as? Double }
+            let outputLatencyMilliseconds = ((AudioDevices.defaultOutputDeviceID().map { AudioDevices.latencySeconds(of: $0, isInput: false) } ?? 0) * 1000).rounded()
+            result["interrupts"] = interruptReports
+            result["interruptSummary"] = [
+                "lessons": interruptReports.count,
+                "cancelledWhileSpeaking": interruptReports.filter { $0["wasSpeaking"] as? Bool == true }.count,
+                "slowestCancelMs": cancelMilliseconds.max() ?? -1,
+                "outputLatencyMs": outputLatencyMilliseconds,
+                "slowestSilenceMs": (cancelMilliseconds.max() ?? 0) + outputLatencyMilliseconds,
+                "marksLeftAfterAnyCancel": interruptReports.compactMap { $0["marksLeftAfterCancel"] as? Int }.max() ?? 0,
+                "callbacksAfterCancel": interruptReports.compactMap { $0["callbacksAfterCancel"] as? Int }.reduce(0, +),
+            ] as [String: Any]
+            lessonEngine = nil
+            return finish(withError: nil)
+        }
+        guard let lessonScreen = renderScreenshot(of: screen) else { return finish(withError: "Couldn't draw the screenshot.") }
+        let engine = LessonEngine(workerBaseURL: Self.workerBaseURL, deviceToken: deviceToken, markOverlay: markOverlay, timingLog: LessonTimingLog(), watchesScreenForChanges: false)
+        var hasBeenCancelled = false
+        var callbacksAfterCancel = 0
+        engine.onFirstAudioHeard = { if hasBeenCancelled { callbacksAfterCancel += 1 } }
+        engine.onFinished = { if hasBeenCancelled { callbacksAfterCancel += 1 } }
+        engine.onFailed = { _ in if hasBeenCancelled { callbacksAfterCancel += 1 } }
+        engine.run(question: options.question, screen: lessonScreen, history: [])
+
+        // Claude's first audio takes about 3 seconds, so this spread cancels roughly half
+        // the lessons while thinking and half while speaking.
+        let secondsBeforeCancel = Double.random(in: 0.3...6.0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + secondsBeforeCancel) {
+            let wasSpeaking = engine.isSpeaking
+            let marksBeforeCancel = self.markOverlay.shownMarkCount
+            let cancelStartSeconds = ProcessInfo.processInfo.systemUptime
+            engine.cancel()
+            let cancelMilliseconds = ((ProcessInfo.processInfo.systemUptime - cancelStartSeconds) * 1000 * 10).rounded() / 10
+            hasBeenCancelled = true
+            let marksLeftAfterCancel = self.markOverlay.shownMarkCount
+            // Waits to see whether anything from the cancelled lesson still happens.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                self.interruptReports.append([
+                    "cancelledAfterSeconds": (secondsBeforeCancel * 10).rounded() / 10,
+                    "wasSpeaking": wasSpeaking,
+                    "marksBeforeCancel": marksBeforeCancel,
+                    "cancelMs": cancelMilliseconds,
+                    "marksLeftAfterCancel": marksLeftAfterCancel,
+                    "callbacksAfterCancel": callbacksAfterCancel,
+                ])
+                self.runInterrupts(on: screen, deviceToken: deviceToken, lessonsLeft: lessonsLeft - 1)
+            }
+        }
     }
 
     /// A full-screen image with the code window where it really is, like a capture, at full
@@ -151,6 +277,12 @@ final class LabController: NSObject, NSApplicationDelegate {
 
     private func finish(withError errorMessage: String?) {
         if let errorMessage { result["error"] = errorMessage }
+        if let forcedFailure = options.forcedFailure {
+            result["forcedFailure"] = forcedFailure
+            result["failuresReported"] = failuresReported
+            result["messagesShown"] = messagesShown
+            result["answerShownAsText"] = answerWasShownAsText
+        }
         if let lessonEngine {
             result["question"] = options.question
             result["spokenText"] = lessonEngine.spokenText

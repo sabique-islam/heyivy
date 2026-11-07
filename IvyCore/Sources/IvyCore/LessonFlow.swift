@@ -147,6 +147,12 @@ public enum LessonFailure: Sendable, Equatable {
     case rateLimited
     case spendLimitReached
     case offline
+    /// Recording worked, but transcription couldn't start or broke off.
+    case transcriptionFailed
+    /// The mic couldn't be opened, or isn't allowed.
+    case microphoneUnavailable
+    /// The screen couldn't be captured, usually because Screen Recording isn't allowed.
+    case screenCaptureFailed
 }
 
 public enum LessonPhase: Sendable, Equatable {
@@ -170,6 +176,25 @@ public enum UserMessage: Sendable, Equatable {
     case slowDown
     case spendLimitReached
     case offline
+    case couldNotHearYou
+    case microphoneUnavailable
+    case cannotSeeScreen
+
+    /// What the user reads. Short, says what happened, and says what to do when there's
+    /// something they can do.
+    public var text: String {
+        switch self {
+        case .voiceUnavailable: return "My voice isn't working right now, so here's the answer as text."
+        case .couldNotGetAnswer: return "I couldn't get an answer. Try asking again."
+        case .deviceNotAuthorized: return "This Mac isn't set up to use Ivy yet. Its access token is missing or has expired."
+        case .slowDown: return "That's a lot of questions at once. Wait a moment, then ask again."
+        case .spendLimitReached: return "You've reached Ivy's usage limit for now."
+        case .offline: return "You're offline. Ivy needs the internet to answer."
+        case .couldNotHearYou: return "I couldn't hear that. Try again."
+        case .microphoneUnavailable: return "I can't use your microphone. Check that Ivy is allowed in System Settings, under Privacy & Security, Microphone."
+        case .cannotSeeScreen: return "I can't see your screen. Check that Ivy is allowed in System Settings, under Privacy & Security, Screen Recording."
+        }
+    }
 }
 
 public enum LessonEvent: Sendable, Equatable {
@@ -238,7 +263,11 @@ public struct LessonStateMachine: Sendable {
             return [.fadeMarksAfterLesson]
 
         case .failed(let lessonID, let failure):
-            guard lessonID == currentLessonID, phase.isActive else { return [] }
+            guard lessonID == currentLessonID else { return [] }
+            // After the voice fails, the answer carries on as text, so a later failure still
+            // matters. It's often the real cause, like an expired token, and its message wins.
+            let isStillShowingAnswerAsText = phase == .failed(.voiceFailed) && failure != .voiceFailed
+            guard phase.isActive || isStillShowingAnswerAsText else { return [] }
             return handleFailure(failure)
 
         case .screenLockedSleptOrDisplaysChanged:
@@ -267,10 +296,29 @@ public struct LessonStateMachine: Sendable {
             return stopEverything(andShow: .spendLimitReached)
         case .offline:
             return stopEverything(andShow: .offline)
+        case .transcriptionFailed:
+            return stopEverything(andShow: .couldNotHearYou)
+        case .microphoneUnavailable:
+            return stopEverything(andShow: .microphoneUnavailable)
+        case .screenCaptureFailed:
+            return stopEverything(andShow: .cannotSeeScreen)
         }
     }
 
     private func stopEverything(andShow message: UserMessage) -> [LessonEffect] {
         [.stopAudio, .cancelLessonWork(currentLessonID), .clearMarks, .showMessage(message)]
+    }
+}
+
+/// The failures any Worker route can answer with, whatever the route does.
+public enum WorkerRefusal {
+    /// The Worker's error shape is `{"error":{"code": ...}}`, so the code says which 429 it is.
+    /// Nil for statuses that mean something different on each route.
+    public static func failure(forStatusCode statusCode: Int, errorBody: String) -> LessonFailure? {
+        switch statusCode {
+        case 401: return .notAuthorized
+        case 429: return errorBody.contains("spend_limit_reached") ? .spendLimitReached : .rateLimited
+        default: return nil
+        }
     }
 }
