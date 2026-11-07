@@ -93,8 +93,10 @@ public enum TargetResolver {
 
         let nearDistance = settings.nearDistanceFraction * max(imagePixelSize.width, imagePixelSize.height)
         let isNearRoughPosition = distance(from: roughPosition, to: nearestCandidate.box) <= nearDistance
-        // An exact match means every named word was found, each one exactly.
-        let isTheOnlyExactMatchOnScreen = candidates.count == 1 && nearestCandidate.quality == .exact
+        // Only full exact matches count here. A line elsewhere holding one of the words, like
+        // "Notifications" in a sidebar, doesn't make "Allow notifications" ambiguous.
+        let fullExactMatches = candidates.filter { $0.quality == .exact && $0.matchedWordCount == targetWords.count }
+        let isTheOnlyExactMatchOnScreen = fullExactMatches.count == 1 && nearestCandidate.quality == .exact && nearestCandidate.matchedWordCount == targetWords.count
         guard isNearRoughPosition || isTheOnlyExactMatchOnScreen else {
             return .dropped(.textFarFromRoughPosition)
         }
@@ -113,30 +115,63 @@ public enum TargetResolver {
         let wordsNeeded = (targetWords.count + 1) / 2
 
         return wordsByLine.values.compactMap { lineWords in
-            var matchedBoxes: [CGRect] = []
-            var everyWordMatchedExactly = true
-            for targetWord in targetWords {
-                // If a word appears twice on the line, the occurrence nearest the position wins.
-                let matches = lineWords.compactMap { recognizedWord -> (word: RecognizedWord, isExact: Bool)? in
-                    let recognizedText = normalizedForMatching(recognizedWord.text)
-                    if recognizedText == targetWord { return (recognizedWord, true) }
-                    if isCloseMatch(recognizedText, targetWord) { return (recognizedWord, false) }
-                    return nil
-                }
-                guard let bestMatch = matches.min(by: {
-                    ($0.isExact ? 0 : 1, distance(from: roughPosition, to: $0.word.boxInImagePixels))
-                        < ($1.isExact ? 0 : 1, distance(from: roughPosition, to: $1.word.boxInImagePixels))
-                }) else {
-                    everyWordMatchedExactly = false
-                    continue
-                }
-                if !bestMatch.isExact { everyWordMatchedExactly = false }
-                matchedBoxes.append(bestMatch.word.boxInImagePixels)
-            }
-            guard matchedBoxes.count >= wordsNeeded, let firstBox = matchedBoxes.first else { return nil }
-            let mergedBox = matchedBoxes.dropFirst().reduce(firstBox) { $0.union($1) }
-            return LineCandidate(box: mergedBox, matchedWordCount: matchedBoxes.count, quality: everyWordMatchedExactly ? .exact : .close)
+            let wordByWordCandidate = wordByWordCandidate(targetWords: targetWords, lineWords: lineWords, wordsNeeded: wordsNeeded, roughPosition: roughPosition)
+            if let wordByWordCandidate, wordByWordCandidate.matchedWordCount == targetWords.count { return wordByWordCandidate }
+            return joinedCandidate(targetWords: targetWords, lineWords: lineWords) ?? wordByWordCandidate
         }
+    }
+
+    /// Recognition and Claude don't always split text the same way. Korean "계정 삭제" can
+    /// come back as one word, and "(x + 3)" as "(x+3)". So the target's words are joined
+    /// without spaces and looked for in the line's words, joined the same way.
+    private static func joinedCandidate(targetWords: [String], lineWords: [RecognizedWord]) -> LineCandidate? {
+        let joinedTarget = targetWords.joined()
+        // Short text would turn up inside longer words, like "cat" in "category".
+        guard joinedTarget.count >= 4 else { return nil }
+        let orderedWords = lineWords.sorted { $0.boxInImagePixels.minX < $1.boxInImagePixels.minX }
+        var joinedLine = ""
+        var wordRanges: [(range: Range<Int>, box: CGRect)] = []
+        for lineWord in orderedWords {
+            let normalizedWord = normalizedForMatching(lineWord.text)
+            wordRanges.append((joinedLine.count..<(joinedLine.count + normalizedWord.count), lineWord.boxInImagePixels))
+            joinedLine += normalizedWord
+        }
+        guard let foundRange = joinedLine.range(of: joinedTarget) else { return nil }
+        let foundStart = joinedLine.distance(from: joinedLine.startIndex, to: foundRange.lowerBound)
+        let foundCharacters = foundStart..<(foundStart + joinedTarget.count)
+        let coveredWords = wordRanges.filter { $0.range.overlaps(foundCharacters) }
+        guard let firstBox = coveredWords.first?.box else { return nil }
+        // The match must make up most of the words it falls in, not be a small piece of one.
+        let coveredCharacterCount = coveredWords.map(\.range.count).reduce(0, +)
+        guard joinedTarget.count * 10 >= coveredCharacterCount * 6 else { return nil }
+        let mergedBox = coveredWords.dropFirst().reduce(firstBox) { $0.union($1.box) }
+        return LineCandidate(box: mergedBox, matchedWordCount: targetWords.count, quality: .exact)
+    }
+
+    private static func wordByWordCandidate(targetWords: [String], lineWords: [RecognizedWord], wordsNeeded: Int, roughPosition: CGPoint) -> LineCandidate? {
+        var matchedBoxes: [CGRect] = []
+        var everyWordMatchedExactly = true
+        for targetWord in targetWords {
+            // If a word appears twice on the line, the occurrence nearest the position wins.
+            let matches = lineWords.compactMap { recognizedWord -> (word: RecognizedWord, isExact: Bool)? in
+                let recognizedText = normalizedForMatching(recognizedWord.text)
+                if recognizedText == targetWord { return (recognizedWord, true) }
+                if isCloseMatch(recognizedText, targetWord) { return (recognizedWord, false) }
+                return nil
+            }
+            guard let bestMatch = matches.min(by: {
+                ($0.isExact ? 0 : 1, distance(from: roughPosition, to: $0.word.boxInImagePixels))
+                    < ($1.isExact ? 0 : 1, distance(from: roughPosition, to: $1.word.boxInImagePixels))
+            }) else {
+                everyWordMatchedExactly = false
+                continue
+            }
+            if !bestMatch.isExact { everyWordMatchedExactly = false }
+            matchedBoxes.append(bestMatch.word.boxInImagePixels)
+        }
+        guard matchedBoxes.count >= wordsNeeded, let firstBox = matchedBoxes.first else { return nil }
+        let mergedBox = matchedBoxes.dropFirst().reduce(firstBox) { $0.union($1) }
+        return LineCandidate(box: mergedBox, matchedWordCount: matchedBoxes.count, quality: everyWordMatchedExactly ? .exact : .close)
     }
 
     /// Lowercased, with typographic dashes and quotes made plain and edge punctuation removed.
@@ -155,11 +190,23 @@ public enum TargetResolver {
         return trimmedText.isEmpty ? normalizedText.trimmingCharacters(in: .whitespaces) : trimmedText
     }
 
-    /// Tolerates a plural, a cut-off word, or one wrong letter in a longer word.
-    private static func isCloseMatch(_ recognizedText: String, _ targetWord: String) -> Bool {
+    /// Tolerates a plural, a cut-off word, one wrong letter in a longer word, and misread
+    /// punctuation in a long token of code.
+    static func isCloseMatch(_ recognizedText: String, _ targetWord: String) -> Bool {
         guard recognizedText.count >= 3, targetWord.count >= 3 else { return false }
-        if recognizedText.contains(targetWord) || targetWord.contains(recognizedText) { return true }
-        return targetWord.count >= 5 && editDistance(recognizedText, targetWord) <= 1
+        // One inside the other counts only when the shorter is most of the longer. Otherwise
+        // a lone "response" would match response.json["name"].
+        let shorterCount = min(recognizedText.count, targetWord.count)
+        let longerCount = max(recognizedText.count, targetWord.count)
+        if (recognizedText.contains(targetWord) || targetWord.contains(recognizedText)) && shorterCount * 10 >= longerCount * 6 { return true }
+        if targetWord.count >= 5 && editDistance(recognizedText, targetWord) <= 1 { return true }
+        // Recognition misreads quotes and brackets in code, like response.json["name"] read
+        // as response.json[inamel]. Long tokens are compared by letters and digits alone,
+        // allowing one slip in every six characters.
+        let recognizedLettersAndDigits = recognizedText.filter { $0.isLetter || $0.isNumber }
+        let targetLettersAndDigits = targetWord.filter { $0.isLetter || $0.isNumber }
+        guard targetLettersAndDigits.count >= 10 else { return false }
+        return editDistance(recognizedLettersAndDigits, targetLettersAndDigits) <= targetLettersAndDigits.count / 6
     }
 
     private static func editDistance(_ first: String, _ second: String) -> Int {

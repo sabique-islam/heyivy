@@ -76,6 +76,59 @@ private func textMark(_ words: [String], near point: PixelPoint, kind: MarkKind 
         #expect(missingAWord == .dropped(.textFarFromRoughPosition))
     }
 
+    @Test func aShortWordInsideALongTargetIsNotAMatch() {
+        // Seen in the D6 eval: recognition read response.json["name"] as response.json[inamel],
+        // and a lone "response" on the line above won instead.
+        let codeWords = [
+            word("response", x: 100, y: 160, width: 80, line: 0),
+            word("=", x: 190, y: 160, width: 10, line: 0),
+            word("return", x: 100, y: 185, width: 60, line: 1),
+            word("response.json[inamel]", x: 170, y: 185, width: 200, line: 1),
+        ]
+        let resolution = TargetResolver.resolve(mark: textMark(["response.json[\"name\"]"], near: PixelPoint(x: 260, y: 192)), recognizedWords: codeWords, imagePixelSize: screenImageSize)
+        #expect(resolution == .drawOnText(box: CGRect(x: 170, y: 185, width: 200, height: 20), matchQuality: .close))
+    }
+
+    @Test func aShortWordAloneDoesNotStandInForALongTarget() {
+        // The right line is unreadable, so the lone "response" is the only thing left. It
+        // must not be marked as if it were response.json["name"].
+        let codeWords = [word("response", x: 100, y: 160, width: 80, line: 0), word("r#%!@&", x: 170, y: 185, width: 200, line: 1)]
+        let resolution = TargetResolver.resolve(mark: textMark(["response.json[\"name\"]"], near: PixelPoint(x: 260, y: 192)), recognizedWords: codeWords, imagePixelSize: screenImageSize)
+        #expect(resolution == .dropped(.textNotFound))
+    }
+
+    @Test func wordsRecognizedWithoutTheirSpaceStillMatch() {
+        // Korean "계정 삭제" came back from recognition as one word.
+        let koreanWords = [word("일반", x: 100, y: 200, width: 40, line: 0), word("계정삭제", x: 100, y: 300, width: 80, line: 1)]
+        let resolution = TargetResolver.resolve(mark: textMark(["계정", "삭제"], near: PixelPoint(x: 140, y: 310)), recognizedWords: koreanWords, imagePixelSize: screenImageSize)
+        #expect(resolution == .drawOnText(box: CGRect(x: 100, y: 300, width: 80, height: 20), matchQuality: .exact))
+    }
+
+    @Test func oneTargetWordSplitIntoSeveralRecognizedWordsStillMatches() {
+        let mathsWords = [word("(x", x: 100, y: 200, width: 24, line: 0), word("+", x: 128, y: 200, width: 10, line: 0), word("3)2", x: 142, y: 200, width: 30, line: 0)]
+        let resolution = TargetResolver.resolve(mark: textMark(["(x+3)"], near: PixelPoint(x: 130, y: 210)), recognizedWords: mathsWords, imagePixelSize: screenImageSize)
+        #expect(resolution == .drawOnText(box: CGRect(x: 100, y: 200, width: 72, height: 20), matchQuality: .exact))
+    }
+
+    @Test func joinedTextMustBeMostOfTheWordsItFallsIn() {
+        // "cate" is in "category", but it's only half of it.
+        let words = [word("category", x: 100, y: 200, width: 80, line: 0)]
+        let resolution = TargetResolver.resolve(mark: textMark(["ca", "te"], near: PixelPoint(x: 120, y: 210)), recognizedWords: words, imagePixelSize: screenImageSize)
+        #expect(resolution == .dropped(.textNotFound))
+    }
+
+    @Test func anExactMatchStaysUnambiguousWhenAnotherLineHoldsOneOfItsWords() {
+        // A sidebar says "Notifications", and the setting says "Allow notifications".
+        let settingsWords = [
+            word("Notifications", x: 20, y: 200, width: 120, line: 0),
+            word("Allow", x: 300, y: 260, width: 50, line: 1),
+            word("notifications", x: 356, y: 260, width: 110, line: 1),
+        ]
+        // Claude put the position on the switch at the far right of the row.
+        let resolution = TargetResolver.resolve(mark: textMark(["Allow", "notifications"], near: PixelPoint(x: 1700, y: 266)), recognizedWords: settingsWords, imagePixelSize: screenImageSize)
+        #expect(resolution == .drawOnText(box: CGRect(x: 300, y: 260, width: 166, height: 20), matchQuality: .exact))
+    }
+
     @Test func textThatIsNotOnScreenIsDropped() {
         let resolution = TargetResolver.resolve(mark: textMark(["Settings"], near: PixelPoint(x: 100, y: 100)), recognizedWords: screenWords, imagePixelSize: screenImageSize)
         #expect(resolution == .dropped(.textNotFound))

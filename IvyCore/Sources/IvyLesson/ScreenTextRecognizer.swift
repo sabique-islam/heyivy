@@ -31,6 +31,9 @@ public enum ScreenTextRecognizer {
         textRequest.recognitionLevel = .accurate
         // Code and names aren't dictionary words, so correction would change them.
         textRequest.usesLanguageCorrection = false
+        // English-only recognition reads Japanese, Korean and Arabic as nonsense. Detecting the
+        // language fixed all three on the evaluation screens, at no measurable cost in time.
+        textRequest.automaticallyDetectsLanguage = true
         try VNImageRequestHandler(cgImage: image).perform([textRequest])
 
         var recognizedWords: [RecognizedWord] = []
