@@ -97,6 +97,11 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         }
     }
 
+    /// For when the key-up can't have been seen, as after the screen locks.
+    func forgetPressedShortcut() {
+        isShortcutCurrentlyPressed = false
+    }
+
     private func handleGlobalEventTap(
         eventType: CGEventType,
         event: CGEvent

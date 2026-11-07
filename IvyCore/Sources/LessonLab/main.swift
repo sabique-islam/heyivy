@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import IvyCore
 import IvyLesson
 import IvyOverlay
@@ -17,6 +18,10 @@ import IvyOverlay
 //                     not-authorized, offline, voice-at-start, or voice-midway.
 //   --interrupts N    Start N lessons and cancel each at a random moment, some while
 //                     thinking and some while speaking, and time how fast each goes quiet.
+//   --soak N          Run N whole lessons in a row and record memory, threads, open files,
+//                     and CPU after each, then check the process for leaks (D7).
+//   --worker URL      Use another Worker, such as scripts/fake-worker.mjs, which stalls or
+//                     drops on purpose (D7).
 //
 // Run it with scripts/lesson-lab.sh. Each run costs a few cents, and --interrupts costs
 // about a cent per lesson.
@@ -37,6 +42,8 @@ struct LabOptions {
     var resultPath = FileManager.default.temporaryDirectory.appendingPathComponent("lesson-lab-result.json").path
     var forcedFailure: String?
     var interruptCount = 0
+    var soakLessonCount = 0
+    var workerBaseURL = "https://secrets.worker.ivy.ivyx.me"
 
     init(arguments: [String]) {
         var argumentIndex = 1
@@ -47,6 +54,8 @@ struct LabOptions {
             case "--result": resultPath = nextValue; argumentIndex += 1
             case "--force": forcedFailure = nextValue; argumentIndex += 1
             case "--interrupts": interruptCount = Int(nextValue) ?? 20; argumentIndex += 1
+            case "--worker": workerBaseURL = nextValue; argumentIndex += 1
+            case "--soak": soakLessonCount = Int(nextValue) ?? 100; argumentIndex += 1
             default: break
             }
             argumentIndex += 1
@@ -107,10 +116,10 @@ final class LabController: NSObject, NSApplicationDelegate {
                 self.startLesson(on: screen, deviceToken: deviceToken)
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (options.interruptCount > 0 ? 600 : 150)) { [weak self] in self?.finish(withError: "Timed out.") }
+        let secondsAllowed: Double = options.soakLessonCount > 0 ? Double(options.soakLessonCount) * 40 + 120 : (options.interruptCount > 0 ? 600 : 150)
+        DispatchQueue.main.asyncAfter(deadline: .now() + secondsAllowed) { [weak self] in self?.finish(withError: "Timed out.") }
     }
 
-    private static let workerBaseURL = "https://secrets.worker.ivy.ivyx.me"
     /// The same state machine the app uses, fed what the engine reports, so the lab can say
     /// what the user would see.
     private var lessonStateMachine = LessonStateMachine()
@@ -123,7 +132,12 @@ final class LabController: NSObject, NSApplicationDelegate {
             runInterrupts(on: screen, deviceToken: deviceToken, lessonsLeft: options.interruptCount)
             return
         }
-        var workerBaseURL = Self.workerBaseURL
+        if options.soakLessonCount > 0 {
+            soakSamples.append(ProcessResourceSample.now(afterLesson: 0, outcome: "before any lesson"))
+            runSoak(on: screen, deviceToken: deviceToken, lessonNumber: 1)
+            return
+        }
+        var workerBaseURL = options.workerBaseURL
         var lessonDeviceToken = deviceToken
         switch options.forcedFailure {
         case "not-authorized": lessonDeviceToken = "ivy1.not-a-real-device.0.not-a-real-signature"
@@ -206,7 +220,7 @@ final class LabController: NSObject, NSApplicationDelegate {
             return finish(withError: nil)
         }
         guard let lessonScreen = renderScreenshot(of: screen) else { return finish(withError: "Couldn't draw the screenshot.") }
-        let engine = LessonEngine(workerBaseURL: Self.workerBaseURL, deviceToken: deviceToken, markOverlay: markOverlay, timingLog: LessonTimingLog(), watchesScreenForChanges: false)
+        let engine = LessonEngine(workerBaseURL: options.workerBaseURL, deviceToken: deviceToken, markOverlay: markOverlay, timingLog: LessonTimingLog(), watchesScreenForChanges: false)
         var hasBeenCancelled = false
         var callbacksAfterCancel = 0
         engine.onFirstAudioHeard = { if hasBeenCancelled { callbacksAfterCancel += 1 } }
@@ -238,6 +252,85 @@ final class LabController: NSObject, NSApplicationDelegate {
                 self.runInterrupts(on: screen, deviceToken: deviceToken, lessonsLeft: lessonsLeft - 1)
             }
         }
+    }
+
+    private var soakSamples: [ProcessResourceSample] = []
+
+    /// Whole lessons, one after another, as someone using Ivy all afternoon would. Each
+    /// engine is released before the next starts, so anything still growing is a leak.
+    private func runSoak(on screen: NSScreen, deviceToken: String, lessonNumber: Int) {
+        guard lessonNumber <= options.soakLessonCount else { return finishSoak() }
+        guard let lessonScreen = renderScreenshot(of: screen) else { return finish(withError: "Couldn't draw the screenshot.") }
+        let engine = LessonEngine(workerBaseURL: options.workerBaseURL, deviceToken: deviceToken, markOverlay: markOverlay, timingLog: LessonTimingLog(), watchesScreenForChanges: false)
+        var hasEnded = false
+        let endLesson: (String) -> Void = { [weak self, weak engine] outcome in
+            guard let self, !hasEnded else { return }
+            hasEnded = true
+            // Marks stay 3 seconds after speech, and the next lesson clears them anyway.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                engine?.cancel()
+                self.markOverlay.clearAll()
+                self.soakSamples.append(ProcessResourceSample.now(afterLesson: lessonNumber, outcome: outcome))
+                self.runSoak(on: screen, deviceToken: deviceToken, lessonNumber: lessonNumber + 1)
+            }
+        }
+        engine.onFinished = { endLesson("spoken") }
+        // Weak, because the engine holds these callbacks, and holding it back would be a leak
+        // of the lab's own making.
+        engine.onFailed = { [weak engine] failure in
+            // After a voice failure the answer still arrives as text, which ends the lesson.
+            if failure == .voiceFailed, let engine, engine.hasScriptFinished == false {
+                engine.onScriptFinished = { _ in endLesson("voice failed, shown as text") }
+            } else {
+                endLesson("failed: \(failure)")
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 35) { endLesson("stuck") }
+        // The one strong reference, replaced by the next lesson's engine.
+        lessonEngine = engine
+        engine.run(question: options.question, screen: lessonScreen, history: [])
+    }
+
+    private func finishSoak() {
+        let outcomeCounts = Dictionary(grouping: soakSamples.dropFirst(), by: \.outcome).mapValues(\.count)
+        result["soakSamples"] = soakSamples.map(\.report)
+        result["soakOutcomes"] = outcomeCounts
+        // Growth is judged from lesson 10 on, after caches and first-use setup have filled.
+        let settledSamples = soakSamples.filter { $0.lessonNumber >= 10 }
+        if let firstSettled = settledSamples.first, let lastSettled = settledSamples.last, lastSettled.lessonNumber > firstSettled.lessonNumber {
+            let lessonsBetween = Double(lastSettled.lessonNumber - firstSettled.lessonNumber)
+            result["soakGrowthFromLesson10"] = [
+                "lessons": lastSettled.lessonNumber - firstSettled.lessonNumber,
+                "footprintMB": [firstSettled.footprintMegabytes, lastSettled.footprintMegabytes],
+                "footprintKBPerLesson": ((lastSettled.footprintMegabytes - firstSettled.footprintMegabytes) * 1024 / lessonsBetween).rounded(),
+                "threads": [firstSettled.threadCount, lastSettled.threadCount],
+                "openFiles": [firstSettled.openFileCount, lastSettled.openFileCount],
+            ] as [String: Any]
+        }
+        if let lastSample = soakSamples.last, soakSamples.count > 1 {
+            result["soakCPUSecondsPerLesson"] = (lastSample.cpuSeconds - soakSamples[0].cpuSeconds) / Double(soakSamples.count - 1)
+        }
+        lessonEngine = nil
+        result["leaksCheck"] = Self.checkThisProcessForLeaks(fullOutputPath: options.resultPath + ".leaks.txt")
+        finish(withError: nil)
+    }
+
+    /// Runs Apple's leaks tool on this process, keeps its full report beside the result, and
+    /// returns its summary line, such as "Process 123: 0 leaks for 0 total leaked bytes."
+    private static func checkThisProcessForLeaks(fullOutputPath: String) -> String {
+        let leaksProcess = Process()
+        leaksProcess.executableURL = URL(fileURLWithPath: "/usr/bin/leaks")
+        leaksProcess.arguments = ["\(getpid())"]
+        let outputPipe = Pipe()
+        leaksProcess.standardOutput = outputPipe
+        leaksProcess.standardError = outputPipe
+        do { try leaksProcess.run() } catch { return "leaks didn't run: \(error.localizedDescription)" }
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        leaksProcess.waitUntilExit()
+        FileManager.default.createFile(atPath: fullOutputPath, contents: outputData)
+        let outputText = String(data: outputData, encoding: .utf8) ?? ""
+        return outputText.split(separator: "\n").first(where: { $0.contains("leaks for") }).map(String.init)
+            ?? "no summary line, exit status \(leaksProcess.terminationStatus)"
     }
 
     /// A full-screen image with the code window where it really is, like a capture, at full
@@ -310,6 +403,49 @@ final class LabController: NSObject, NSApplicationDelegate {
             FileManager.default.createFile(atPath: options.resultPath, contents: resultData)
         }
         NSApp.terminate(nil)
+    }
+}
+
+/// How much of the Mac this process holds after a lesson.
+struct ProcessResourceSample {
+    var lessonNumber: Int
+    var outcome: String
+    var footprintMegabytes: Double
+    var threadCount: Int
+    var openFileCount: Int
+    var cpuSeconds: Double
+
+    static func now(afterLesson lessonNumber: Int, outcome: String) -> ProcessResourceSample {
+        // The footprint is what Activity Monitor shows as Memory.
+        var vmInfo = task_vm_info_data_t()
+        var vmInfoCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let vmInfoResult = withUnsafeMutablePointer(to: &vmInfo) { vmInfoPointer in
+            vmInfoPointer.withMemoryRebound(to: integer_t.self, capacity: Int(vmInfoCount)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmInfoCount) }
+        }
+        let footprintBytes = vmInfoResult == KERN_SUCCESS ? Double(vmInfo.phys_footprint) : -1
+
+        var threadList: thread_act_array_t?
+        var threadCount = mach_msg_type_number_t(0)
+        if task_threads(mach_task_self_, &threadList, &threadCount) == KERN_SUCCESS, let threadList {
+            vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: threadList)), vm_size_t(Int(threadCount) * MemoryLayout<thread_t>.stride))
+        }
+
+        let openFileCount = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
+
+        var resourceUsage = rusage()
+        getrusage(RUSAGE_SELF, &resourceUsage)
+        let cpuSeconds = Double(resourceUsage.ru_utime.tv_sec + resourceUsage.ru_stime.tv_sec) + Double(resourceUsage.ru_utime.tv_usec + resourceUsage.ru_stime.tv_usec) / 1_000_000
+
+        return ProcessResourceSample(
+            lessonNumber: lessonNumber, outcome: outcome,
+            footprintMegabytes: (footprintBytes / 1_048_576 * 10).rounded() / 10,
+            threadCount: Int(threadCount), openFileCount: openFileCount,
+            cpuSeconds: (cpuSeconds * 100).rounded() / 100
+        )
+    }
+
+    var report: [String: Any] {
+        ["lesson": lessonNumber, "outcome": outcome, "footprintMB": footprintMegabytes, "threads": threadCount, "openFiles": openFileCount, "cpuSeconds": cpuSeconds]
     }
 }
 

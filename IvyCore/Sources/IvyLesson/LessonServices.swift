@@ -62,6 +62,9 @@ public enum ClaudeScriptStream {
                     // Claude reports input tokens at the start and output tokens at the end. Only the
                     // eval tool asks for them, to report what a run cost.
                     var inputTokens = 0
+                    // The Worker reports a broken stream by ending it early, and a cut connection
+                    // can end it the same way, so only Claude's own end event means it's all here.
+                    var hasReceivedMessageStop = false
                     for try await line in responseBytes.lines {
                         guard line.hasPrefix("data: "),
                               let eventData = line.dropFirst(6).data(using: .utf8),
@@ -84,8 +87,11 @@ public enum ClaudeScriptStream {
                             continuation.yield(text)
                         } else if eventType == "error" {
                             throw LessonFailureError(failure: .answerFailed)
+                        } else if eventType == "message_stop" {
+                            hasReceivedMessageStop = true
                         }
                     }
+                    guard hasReceivedMessageStop else { throw LessonFailureError(failure: .answerFailed) }
                     continuation.finish()
                 } catch let urlError as URLError {
                     switch urlError.code {
@@ -131,12 +137,25 @@ public final class VoiceStream {
     private let webSocketTask: URLSessionWebSocketTask
     private var receivedAudioSeconds = 0.0
     private var isClosedOnPurpose = false
+    private var hasFailed = false
+
+    /// A WebSocket that goes quiet, as when the network drops, reports nothing for minutes, so
+    /// the voice is given a deadline instead. Once the voice has been asked to speak, by a
+    /// flush or the end of the text, it has this long to send something, and after the end of
+    /// the text it has this long between messages until it's done. ElevenLabs usually replies
+    /// in under a second and sends faster than it plays, so a gap this long means it's stuck.
+    public static let longestSilenceFromVoiceSeconds = 8.0
+    private var waitingForVoiceSinceHostSeconds: Double?
+    private var hasSentEndOfText = false
+    private var silenceCheckTimer: Timer?
 
     // The Worker closes with these when a device hits its limits.
     private static let spendLimitCloseCode = 4429
 
     public init(workerBaseURL: String, deviceToken: String) {
-        var request = URLRequest(url: URL(string: "\(workerBaseURL.replacingOccurrences(of: "https://", with: "wss://"))/voice")!)
+        // http:// is only for a local test Worker, like scripts/fake-worker.mjs.
+        let webSocketBaseURL = workerBaseURL.replacingOccurrences(of: "https://", with: "wss://").replacingOccurrences(of: "http://", with: "ws://")
+        var request = URLRequest(url: URL(string: "\(webSocketBaseURL)/voice")!)
         request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
         webSocketTask = URLSession.shared.webSocketTask(with: request)
         webSocketTask.maximumMessageSize = 16 * 1024 * 1024
@@ -156,6 +175,12 @@ public final class VoiceStream {
         webSocketTask.resume()
         sendMessage(["text": " ", "generation_config": ["chunk_length_schedule": [50]]])
         receiveNextMessage()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.failIfTheVoiceHasGoneQuiet() }
+        }
+        // Common modes keep it running while a menu is open.
+        RunLoop.main.add(timer, forMode: .common)
+        silenceCheckTimer = timer
     }
 
     /// A piece that ends a sentence is flushed, so speech starts at the first sentence break.
@@ -163,16 +188,45 @@ public final class VoiceStream {
         guard !speechText.isEmpty else { return }
         let endsASentence = speechText.range(of: "[.!?](\\s|$)", options: .regularExpression) != nil
         sendMessage(endsASentence ? ["text": speechText, "flush": true] : ["text": speechText])
+        if endsASentence { startWaitingForVoiceIfNotAlready() }
     }
 
     /// Tells the voice no more text is coming, so it speaks the rest and finishes.
     public func finishText() {
         sendMessage(["text": ""])
+        hasSentEndOfText = true
+        startWaitingForVoiceIfNotAlready()
     }
 
     public func close() {
         isClosedOnPurpose = true
+        stopCheckingForSilence()
         webSocketTask.cancel(with: .normalClosure, reason: nil)
+    }
+
+    private func startWaitingForVoiceIfNotAlready() {
+        if waitingForVoiceSinceHostSeconds == nil { waitingForVoiceSinceHostSeconds = currentHostSeconds() }
+    }
+
+    private func failIfTheVoiceHasGoneQuiet() {
+        guard let waitingSince = waitingForVoiceSinceHostSeconds,
+              currentHostSeconds() - waitingSince > Self.longestSilenceFromVoiceSeconds else { return }
+        reportFailure(.voiceFailed)
+        close()
+    }
+
+    private func stopCheckingForSilence() {
+        silenceCheckTimer?.invalidate()
+        silenceCheckTimer = nil
+    }
+
+    /// The connection can fail and time out at once, so this makes sure the lesson hears once.
+    private func reportFailure(_ failure: LessonFailure) {
+        guard !hasFailed, !isClosedOnPurpose, !hasReceivedFinalMessage else { return }
+        hasFailed = true
+        stopCheckingForSilence()
+        speechPlayer?.markStreamEnded()
+        onFailed?(failure)
     }
 
     private func sendMessage(_ message: [String: Any]) {
@@ -195,16 +249,16 @@ public final class VoiceStream {
                 case .success:
                     self.receiveNextMessage()
                 case .failure:
-                    guard !self.isClosedOnPurpose, !self.hasReceivedFinalMessage else { return }
-                    self.speechPlayer?.markStreamEnded()
                     let failure: LessonFailure = self.webSocketTask.closeCode.rawValue == Self.spendLimitCloseCode ? .spendLimitReached : .voiceFailed
-                    self.onFailed?(failure)
+                    self.reportFailure(failure)
                 }
             }
         }
     }
 
     private func apply(_ message: [String: Any]) {
+        // Any reply answers the wait, but after the end of the text the rest is still owed.
+        waitingForVoiceSinceHostSeconds = hasSentEndOfText ? currentHostSeconds() : nil
         var audioSecondsInThisMessage = 0.0
         if let audioBase64 = message["audio"] as? String, let audioData = Data(base64Encoded: audioBase64), !audioData.isEmpty {
             if receivedAudioSeconds == 0 { onFirstAudioReceived?() }

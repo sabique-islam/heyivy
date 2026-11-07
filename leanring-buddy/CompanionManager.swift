@@ -747,12 +747,18 @@ final class CompanionManager: ObservableObject {
 
     private func showAnswerInLessonBubble(answerText: String, isComplete: Bool) {
         let notice = lessonBubble?.notice ?? UserMessage.voiceUnavailable.text
+        if lessonBubble?.notice != notice { announceForVoiceOver(notice) }
         lessonBubble = LessonBubble(notice: notice, answerText: answerText.isEmpty ? nil : answerText)
         lessonBubbleHideTask?.cancel()
-        if isComplete { scheduleLessonBubbleHide() }
+        if isComplete {
+            // Read once it's all there, since reading each piece as it streams would talk over itself.
+            if !answerText.isEmpty { announceForVoiceOver(answerText) }
+            scheduleLessonBubbleHide()
+        }
     }
 
     private func showLessonBubble(_ newLessonBubble: LessonBubble) {
+        if lessonBubble?.notice != newLessonBubble.notice { announceForVoiceOver(newLessonBubble.notice) }
         lessonBubble = newLessonBubble
         // An answer still arriving as text keeps the bubble up until it's complete.
         if !isShowingAnswerAsText { scheduleLessonBubbleHide() }
@@ -769,6 +775,17 @@ final class CompanionManager: ObservableObject {
             self?.hideLessonBubble()
             self?.scheduleTransientHideIfNeeded()
         }
+    }
+
+    /// The bubble is drawn in an overlay that VoiceOver doesn't read, so its messages, and an
+    /// answer shown as text because the voice failed, are announced instead.
+    private func announceForVoiceOver(_ text: String) {
+        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue]
+        )
     }
 
     private func hideLessonBubble() {
@@ -818,6 +835,9 @@ final class CompanionManager: ObservableObject {
         activeLessonEngine?.cancel()
         activeLessonEngine = nil
         buddyDictationManager.cancelCurrentDictation(preserveDraftText: false)
+        // A locked or sleeping Mac doesn't pass on the shortcut's key-up, which would leave
+        // the shortcut held and make the next press do nothing.
+        globalPushToTalkShortcutMonitor.forgetPressedShortcut()
         hideLessonBubble()
         voiceState = .idle
     }
