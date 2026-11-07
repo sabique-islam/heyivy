@@ -23,7 +23,8 @@ public enum TextMatchQuality: Sendable, Equatable {
 }
 
 public enum TargetDropReason: Sendable, Equatable {
-    /// The text was found, but far from where Claude said it was. One of them is wrong.
+    /// The text was found, but far from where Claude said it was, and either it appears
+    /// more than once or it only partly matched, so there's no telling which place was meant.
     case textFarFromRoughPosition
     case textNotFound
     case positionOffScreen
@@ -49,7 +50,9 @@ public struct TargetResolverSettings: Sendable {
 /// Finds where a mark should go, using text recognition to correct Claude's rough position.
 ///
 /// A missing mark is better than a wrong one: the explanation still works without it, and
-/// a wrong circle breaks trust. So when the text and the position disagree, it's dropped.
+/// a wrong circle breaks trust. Claude reads text far more reliably than it places points,
+/// though, so text that matches exactly and appears only once on screen is trusted wherever
+/// it is. When the text and the position disagree otherwise, the mark is dropped.
 public enum TargetResolver {
     public static func resolve(
         mark: MarkRequest,
@@ -89,7 +92,10 @@ public enum TargetResolver {
         }
 
         let nearDistance = settings.nearDistanceFraction * max(imagePixelSize.width, imagePixelSize.height)
-        guard distance(from: roughPosition, to: nearestCandidate.box) <= nearDistance else {
+        let isNearRoughPosition = distance(from: roughPosition, to: nearestCandidate.box) <= nearDistance
+        // An exact match means every named word was found, each one exactly.
+        let isTheOnlyExactMatchOnScreen = candidates.count == 1 && nearestCandidate.quality == .exact
+        guard isNearRoughPosition || isTheOnlyExactMatchOnScreen else {
             return .dropped(.textFarFromRoughPosition)
         }
         return .drawOnText(box: nearestCandidate.box, matchQuality: nearestCandidate.quality)

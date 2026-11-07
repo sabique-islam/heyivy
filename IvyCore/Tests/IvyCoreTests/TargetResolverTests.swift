@@ -57,9 +57,23 @@ private func textMark(_ words: [String], near point: PixelPoint, kind: MarkKind 
         #expect(resolution == .dropped(.textNotFound))
     }
 
-    @Test func matchingTextFarFromTheRoughPositionIsDropped() {
+    @Test func textThatAppearsOnceAndMatchesExactlyIsTrustedWhereverItIs() {
         let resolution = TargetResolver.resolve(mark: textMark(["Export", "as", "PDF"], near: PixelPoint(x: 200, y: 1000)), recognizedWords: screenWords, imagePixelSize: screenImageSize)
+        #expect(resolution == .drawOnText(box: CGRect(x: 1500, y: 40, width: 140, height: 20), matchQuality: .exact))
+    }
+
+    @Test func repeatedTextFarFromTheRoughPositionIsDropped() {
+        // fibonacci(n) is on two lines, and the position is near neither, so either could be meant.
+        let resolution = TargetResolver.resolve(mark: textMark(["fibonacci(n"], near: PixelPoint(x: 1500, y: 1000)), recognizedWords: screenWords, imagePixelSize: screenImageSize)
         #expect(resolution == .dropped(.textFarFromRoughPosition))
+    }
+
+    @Test func aPartialMatchFarFromTheRoughPositionIsDropped() {
+        let partlyMatching = TargetResolver.resolve(mark: textMark(["Exports", "as", "PDFs"], near: PixelPoint(x: 200, y: 1000)), recognizedWords: screenWords, imagePixelSize: screenImageSize)
+        #expect(partlyMatching == .dropped(.textFarFromRoughPosition))
+        // Only two of the three named words are on screen, so the match isn't exact either.
+        let missingAWord = TargetResolver.resolve(mark: textMark(["Export", "as", "Word"], near: PixelPoint(x: 200, y: 1000)), recognizedWords: screenWords, imagePixelSize: screenImageSize)
+        #expect(missingAWord == .dropped(.textFarFromRoughPosition))
     }
 
     @Test func textThatIsNotOnScreenIsDropped() {
