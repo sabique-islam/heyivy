@@ -118,21 +118,23 @@ td.label { text-align: left; } th.row { min-width: 40px; }
 """
 
 SHEETS = [
-    ("Budget 2026", ["Month", "Rent", "Food", "Travel"], [["January", 1200, 410, 90], ["February", 1200, 385, 240], ["March", 1200, 450, 60], ["April", 1200, 398, 510]], "Total", "=SUM(B2:B4)", (5, 1), "why is the rent total too low?", "formula"),
-    ("Sales", ["Region", "Q1", "Q2", "Q3"], [["North", 4200, 4800, 5100], ["South", 3900, 3700, 3500], ["East", 5100, 6900, 7400], ["West", 2800, 2900, 3100]], None, None, (3, 3), "which region grew the most?", "cell"),
-    ("Grades", ["Student", "Test 1", "Test 2", "Average"], [["Priya", 88, 92, 90], ["Tom", 75, 0, "#DIV/0!"], ["Lena", 95, 91, 93], ["Omar", 67, 80, 73.5]], None, "=AVERAGE(B3:C3)/0", (2, 4), "what does this error in the table mean?", "cell"),
-    ("Inventory", ["Item", "Stock", "Price", "Value"], [["Pens", 120, 1.5, 180], ["Notebooks", 45, 3.25, 146.25], ["Staplers", 12, 8, 960], ["Folders", 80, 0.9, 72]], None, "=B4*C4*10", (3, 4), "one of these values looks off, which one?", "cell"),
-    ("Workout log", ["Week", "Runs", "Miles", "Pace"], [["1", 3, 9.5, "9:40"], ["2", 4, 12.0, "9:25"], ["3", 2, 6.1, "9:55"], ["4", 4, 13.4, "9:10"]], None, None, (4, 3), "which week did I run the most miles?", "cell"),
-    ("Loan", ["Year", "Balance", "Rate", "Interest"], [["2026", 20000, "5%", 1000], ["2027", 19000, "5%", 950], ["2028", 18000, "5%", 9000], ["2029", 17000, "5%", 850]], None, "=B4*C4*10", (3, 4), "the interest jumps in one year, why?", "cell"),
-    ("Survey", ["Answer", "Count", "Share", ""], [["Yes", 132, "61%", ""], ["No", 64, "30%", ""], ["Unsure", 21, "10%", ""], ["Total", 217, "101%", ""]], None, None, (4, 3), "why do the percentages add up to more than 100?", "cell"),
-    ("Payroll", ["Name", "Hours", "Rate", "Pay"], [["Ana", 38, 22, 836], ["Ben", 41, 19, 779], ["Chloe", 35, 25, 875], ["Dev", 40, 21, "=B5*C5"]], None, "=B5*C5", (4, 4), "why is one pay cell showing a formula instead of a number?", "cell"),
-    ("Temperatures", ["City", "Mon", "Tue", "Wed"], [["Oslo", 4, 6, 3], ["Cairo", 31, 33, 34], ["Lima", 19, 18, 20], ["Perth", 24, 22, 25]], None, None, (2, 3), "which city was hottest on wednesday?", "cell"),
-    ("Subscriptions", ["Service", "Monthly", "Yearly", "Saving"], [["Music", 10.99, 109, 22.88], ["Video", 15.49, 155, 30.88], ["Cloud", 2.99, 29.99, 5.89], ["News", 8, 120, -24]], None, None, (4, 4), "what does the negative number mean?", "cell"),
+    ("Budget 2026", ["Month", "Rent", "Food", "Travel"], [["January", 1200, 410, 90], ["February", 1200, 385, 240], ["March", 1200, 450, 60], ["April", 1200, 398, 510]], "Total", "=SUM(B2:B4)", ["B6"], "why is the rent total too low?"),
+    ("Sales", ["Region", "Q1", "Q2", "Q3"], [["North", 4200, 4800, 5100], ["South", 3900, 3700, 3500], ["East", 5100, 6900, 7400], ["West", 2800, 2900, 3100]], None, None, ["D4", "A4", "B4", "C4"], "which region grew the most?"),
+    ("Grades", ["Student", "Test 1", "Test 2", "Average"], [["Priya", 88, 92, 90], ["Tom", 75, 0, "#DIV/0!"], ["Lena", 95, 91, 93], ["Omar", 67, 80, 73.5]], None, "=AVERAGE(B3:C3)/0", ["D3"], "what does this error in the table mean?"),
+    ("Inventory", ["Item", "Stock", "Price", "Value"], [["Pens", 120, 1.5, 180], ["Notebooks", 45, 3.25, 146.25], ["Staplers", 12, 8, 960], ["Folders", 80, 0.9, 72]], None, "=B4*C4*10", ["D4"], "one of these values looks off, which one?"),
+    ("Workout log", ["Week", "Runs", "Miles", "Pace"], [["1", 3, 9.5, "9:40"], ["2", 4, 12.0, "9:25"], ["3", 2, 6.1, "9:55"], ["4", 4, 13.4, "9:10"]], None, None, ["C5", "A5"], "which week did I run the most miles?"),
+    ("Loan", ["Year", "Balance", "Rate", "Interest"], [["2026", 20000, "5%", 1000], ["2027", 19000, "5%", 950], ["2028", 18000, "5%", 9000], ["2029", 17000, "5%", 850]], None, "=B4*C4*10", ["D4"], "the interest jumps in one year, why?"),
+    ("Survey", ["Answer", "Count", "Share", ""], [["Yes", 132, "61%", ""], ["No", 64, "30%", ""], ["Unsure", 21, "10%", ""], ["Total", 217, "101%", ""]], None, None, ["C5"], "why do the percentages add up to more than 100?"),
+    ("Payroll", ["Name", "Hours", "Rate", "Pay"], [["Ana", 38, 22, 836], ["Ben", 41, 19, 779], ["Chloe", 35, 25, 875], ["Dev", 40, 21, "=B5*C5"]], None, "=B5*C5", ["D5"], "why is one pay cell showing a formula instead of a number?"),
+    ("Temperatures", ["City", "Mon", "Tue", "Wed"], [["Oslo", 4, 6, 3], ["Cairo", 31, 33, 34], ["Lima", 19, 18, 20], ["Perth", 24, 22, 25]], None, None, ["D3", "A3"], "which city was hottest on wednesday?"),
+    ("Subscriptions", ["Service", "Monthly", "Yearly", "Saving"], [["Music", 10.99, 109, 22.88], ["Video", 15.49, 155, 30.88], ["Cloud", 2.99, 29.99, 5.89], ["News", 8, 120, -24]], None, None, ["D5"], "what does the negative number mean?"),
 ]
 
 
 def sheet_case(case_id, sheet):
-    title, headers, rows, total_label, formula, target_cell, question, _ = sheet
+    # target_cells: the cell the question is about, then any others also fine to mark, like
+    # the row's label. Named as in the sheet, like "D3", so they can be checked by eye.
+    title, headers, rows, total_label, formula, target_cells, question = sheet
     columns = "ABCD"
     header_html = '<tr><th class="row"></th>' + "".join(f"<th>{letter}</th>" for letter in columns) + "</tr>"
     header_html += '<tr><th class="row">1</th>' + "".join(f'<td class="label"><b>{html.escape(str(h))}</b></td>' for h in headers) + "</tr>"
@@ -143,15 +145,17 @@ def sheet_case(case_id, sheet):
     for row_index, row in enumerate(all_rows, start=2):
         cells = ""
         for column_index, value in enumerate(row, start=1):
-            is_target = (row_index, column_index) == target_cell
+            cell_name = f"{columns[column_index - 1]}{row_index}"
             text = html.escape(str(value))
             css_class = "label" if column_index == 1 else ""
-            if is_target:
+            if cell_name == target_cells[0]:
                 cells += f'<td class="{css_class} selected"><span data-target>{text}</span></td>'
+            elif cell_name in target_cells:
+                cells += f'<td class="{css_class}"><span data-ok>{text}</span></td>'
             else:
                 cells += f'<td class="{css_class}">{text}</td>'
         body_rows += f'<tr><th class="row">{row_index}</th>{cells}</tr>'
-    cell_name = f"{columns[target_cell[1] - 1]}{target_cell[0]}"
+    cell_name = target_cells[0]
     formula_html = f'<span data-ok>{html.escape(formula)}</span>' if formula else ""
     body = f'<div class="formula"><span class="name">{cell_name}</span><span>ƒx</span>{formula_html}</div><table>{header_html}{body_rows}</table>'
     return {"id": case_id, "category": "spreadsheet", "question": question,
@@ -298,10 +302,14 @@ def design_case(case_id, task):
     sections = {"Layout": ["Width", "Height", "Rotation", "Constraints", "Auto layout"], "Appearance": ["Opacity", "Corner radius", "Fill", "Stroke", "Drop shadow"], "Text": ["Font size", "Line height"], "Export": ["Export"]}
     properties = ""
     for section, fields in sections.items():
-        properties += f"<h3>{section}</h3>"
+        heading_role = " data-ok" if section == target_field else ""
+        properties += f"<h3{heading_role}>{section}</h3>"
         for field in fields:
-            label = f'<span data-target>{field}</span>' if field == target_field else field
-            properties += f'<div class="field">{label}<input value="{ {"Width": 220, "Height": 56, "Opacity": "100%", "Corner radius": 0, "Font size": 18}.get(field, "—") }"></div>'
+            is_target = field == target_field
+            label = f'<span data-target>{field}</span>' if is_target else field
+            # The value box beside the field is what you'd click, so marking it is right too.
+            input_role = " data-ok" if is_target else ""
+            properties += f'<div class="field">{label}<input{input_role} value="{ {"Width": 220, "Height": 56, "Opacity": "100%", "Corner radius": 0, "Font size": 18}.get(field, "—") }"></div>'
     layers = '<div>Frame 1</div><div class="picked">Button</div><div>&nbsp;&nbsp;Label</div><div>Background</div>'
     body = f'<div class="design"><div class="layers"><b>Layers</b>{layers}</div><div class="canvas"><div class="button-preview" data-ok>Get started</div></div><div class="properties">{properties}</div></div>'
     return {"id": case_id, "category": "design tool", "question": question,
