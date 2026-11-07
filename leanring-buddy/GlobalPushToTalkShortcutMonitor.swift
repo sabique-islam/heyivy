@@ -124,6 +124,11 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
             shortcutTransitionPublisher.send(.pressed)
         case .released:
             isShortcutCurrentlyPressed = false
+            // Push-to-talk was ending while the keys were still held. This shows which
+            // process sent the release, and the flags it carried: a hardware key-up comes
+            // from the window server, while another app posting events shows its own process ID.
+            let sourceProcessID = event.getIntegerValueField(.eventSourceUnixProcessID)
+            print("⌨️ Push-to-talk released: flags 0x\(String(event.flags.rawValue, radix: 16)), sent by process \(sourceProcessID)")
             shortcutTransitionPublisher.send(.released)
         }
 

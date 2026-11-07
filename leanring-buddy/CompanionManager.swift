@@ -92,6 +92,11 @@ final class CompanionManager: ObservableObject {
     private var preparedLessonEngine: LessonEngine?
     /// The lesson currently speaking or thinking. Cancelled by the next key press.
     private var activeLessonEngine: LessonEngine?
+    /// Started when the key goes down, so the capture is done by the time the user lets go,
+    /// which takes about 0.7 s off the first audio. It shows the screen as the user started
+    /// asking, which is almost always what they're asking about. Ivy's own windows are
+    /// left out of the capture, so the waveform overlay shown at key press isn't in it.
+    private var screenCaptureStartedAtKeyPress: Task<[CompanionScreenCapture], Error>?
 
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -297,6 +302,11 @@ final class CompanionManager: ObservableObject {
         if currentlyHasAccessibility {
             globalPushToTalkShortcutMonitor.start()
         } else {
+            if previouslyHadAccessibility {
+                // Stopping the monitor hides the waveform, so a brief permission blip would look
+                // like push-to-talk cutting out.
+                print("⌨️ Accessibility permission reads as off, so the push-to-talk monitor stopped")
+            }
             globalPushToTalkShortcutMonitor.stop()
         }
 
@@ -483,6 +493,10 @@ final class CompanionManager: ObservableObject {
             activeLessonEngine = nil
             preparedLessonEngine?.cancel()
             preparedLessonEngine = makeLessonEngine()
+            screenCaptureStartedAtKeyPress?.cancel()
+            screenCaptureStartedAtKeyPress = Task {
+                try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+            }
 
             // Dismiss the onboarding prompt if it's showing
             if showOnboardingPrompt {
@@ -498,7 +512,10 @@ final class CompanionManager: ObservableObject {
 
             ClickyAnalytics.trackPushToTalkStarted()
 
-            pendingKeyboardShortcutStartTask?.cancel()
+            // A question still connecting or finishing is left to finish, so it isn't lost.
+            if !buddyDictationManager.isDictationInProgress {
+                pendingKeyboardShortcutStartTask?.cancel()
+            }
             pendingKeyboardShortcutStartTask = Task {
                 await buddyDictationManager.startPushToTalkFromKeyboardShortcut(
                     currentDraftText: "",
@@ -514,15 +531,18 @@ final class CompanionManager: ObservableObject {
                 )
             }
         case .released:
-            // Cancel the pending start task in case the user released the shortcut
-            // before the async startPushToTalk had a chance to begin recording.
-            // Without this, a quick press-and-release drops the release event and
-            // leaves the waveform overlay stuck on screen indefinitely.
             ClickyAnalytics.trackPushToTalkReleased()
             preparedLessonEngine?.timingLog.record("key released")
-            pendingKeyboardShortcutStartTask?.cancel()
-            pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
+            // If the release came before recording began, the pending start is cancelled.
+            // Without this, a quick press-and-release drops the release event and leaves
+            // the waveform overlay stuck on screen. Once the mic is recording, the start is
+            // left to finish connecting, because cancelling it would throw away a question
+            // shorter than the time transcription takes to connect.
+            if !buddyDictationManager.isDictationInProgress {
+                pendingKeyboardShortcutStartTask?.cancel()
+                pendingKeyboardShortcutStartTask = nil
+            }
         case .none:
             break
         }
@@ -580,13 +600,18 @@ final class CompanionManager: ObservableObject {
         }
         preparedLessonEngine = nil
         activeLessonEngine = lessonEngine
+        // Without a key press, as for a question typed into the panel, the screen is captured now.
+        let screenCaptureTask = screenCaptureStartedAtKeyPress ?? Task {
+            try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+        }
+        screenCaptureStartedAtKeyPress = nil
 
         // Captured strongly by the task on purpose. The callbacks below hold them weakly,
         // because the engine keeps its callbacks, and a strong reference would never be freed.
         currentResponseTask = Task { [self, lessonEngine] in
             voiceState = .processing
             do {
-                let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                let screenCaptures = try await screenCaptureTask.value
                 guard !Task.isCancelled else { return }
 
                 // Marks go on the screen with the cursor, which is the one the question is

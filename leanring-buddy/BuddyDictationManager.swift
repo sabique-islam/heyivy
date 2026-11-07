@@ -11,6 +11,7 @@ import AppKit
 import AVFoundation
 import Combine
 import Foundation
+import IvyLesson
 import Speech
 
 enum BuddyPushToTalkShortcut {
@@ -163,13 +164,18 @@ enum BuddyPushToTalkShortcut {
         if let modifierOnlyFlags = currentShortcutOption.modifierOnlyFlags {
             guard shortcutEventType == .flagsChanged else { return .none }
 
-            let isShortcutCurrentlyPressed = modifierFlags.contains(modifierOnlyFlags)
+            // Push-to-talk starts once every key in the shortcut is down, but only ends once
+            // they're all up. Holding two modifiers while talking, a finger often slips off one
+            // for a moment, and the keyboard reports that as a real key-up. Ending on the first
+            // key up cut recordings off after about a second.
+            let areAllShortcutKeysDown = modifierFlags.contains(modifierOnlyFlags)
+            let areAllShortcutKeysUp = modifierFlags.intersection(modifierOnlyFlags).isEmpty
 
-            if isShortcutCurrentlyPressed && !wasShortcutPreviouslyPressed {
+            if areAllShortcutKeysDown && !wasShortcutPreviouslyPressed {
                 return .pressed
             }
 
-            if !isShortcutCurrentlyPressed && wasShortcutPreviouslyPressed {
+            if areAllShortcutKeysUp && wasShortcutPreviouslyPressed {
                 return .released
             }
 
@@ -263,7 +269,10 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     }
 
     private let transcriptionProvider: any BuddyTranscriptionProvider
-    private let audioEngine = AVAudioEngine()
+    /// Shared with the voice lab, which tests it. It picks the mic and survives device changes.
+    private let microphoneCapture = MicrophoneCapture()
+    /// Holds what's said while transcription is still connecting. See `EarlyAudioRelay`.
+    private let earlyAudioRelay = EarlyAudioRelay()
     private var activeTranscriptionSession: (any BuddyStreamingTranscriptionSession)?
     private var activeStartSource: BuddyDictationStartSource?
     private var draftCallbacks: BuddyDictationDraftCallbacks?
@@ -342,8 +351,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             draftCallbacks?.updateDraftText(currentDraftText)
         }
 
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        microphoneCapture.stop()
         activeTranscriptionSession?.cancel()
 
         resetSessionState()
@@ -451,8 +459,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             try await startRecognitionSession()
             guard !Task.isCancelled else {
                 print("🎙️ BuddyDictationManager: start cancelled (shortcut released during session start)")
-                audioEngine.stop()
-                audioEngine.inputNode.removeTap(onBus: 0)
+                microphoneCapture.stop()
                 activeTranscriptionSession?.cancel()
                 resetSessionState()
                 return
@@ -469,6 +476,8 @@ final class BuddyDictationManager: NSObject, ObservableObject {
                 fallback: "couldn't start voice input. try again."
             )
             print("❌ BuddyDictationManager: failed to start recognition session (\(transcriptionProvider.displayName)): \(error)")
+            // The mic is already on by now, so it has to be turned off here.
+            microphoneCapture.stop()
             resetSessionState()
         }
     }
@@ -483,16 +492,39 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         guard !isFinalizingTranscript else { return }
 
         print("🎙️ BuddyDictationManager: stop requested (\(expectedStartSource))")
+        // How much audio reached transcription, and what it had heard so far. The text itself
+        // isn't logged, only its length.
+        print(String(
+            format: "🎙️ Captured %.1f s from %@, peak level %.3f, device restarts %d, transcript so far %d characters",
+            microphoneCapture.capturedSeconds,
+            microphoneCapture.microphoneName,
+            microphoneCapture.peakLevel,
+            microphoneCapture.restartsAfterDeviceChange,
+            latestRecognizedText.count
+        ))
 
         isRecordingFromMicrophoneButton = false
         isRecordingFromKeyboardShortcut = false
         isFinalizingTranscript = true
 
+        microphoneCapture.stop()
+
+        // Connecting to transcription takes about two seconds, so a short question can end
+        // before it's ready. Its audio is held, and the final transcript is asked for once
+        // the connection is up and the held audio has been sent.
+        guard activeTranscriptionSession != nil else {
+            print("🎙️ BuddyDictationManager: released while connecting, finishing once connected")
+            return
+        }
+        requestFinalTranscriptWithFallback()
+    }
+
+    /// Asks for the final transcript, and finishes with what's been heard so far if it
+    /// doesn't come in time.
+    private func requestFinalTranscriptWithFallback() {
         let finalTranscriptFallbackDelaySeconds = activeTranscriptionSession?.finalTranscriptFallbackDelaySeconds
             ?? Self.defaultFinalTranscriptFallbackDelaySeconds
 
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
         activeTranscriptionSession?.requestFinalTranscript()
 
         finalizeFallbackWorkItem?.cancel()
@@ -514,6 +546,11 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     private func startRecognitionSession() async throws {
         activeTranscriptionSession?.cancel()
         activeTranscriptionSession = nil
+        earlyAudioRelay.reset()
+
+        // The mic starts before transcription connects, which takes about a second, so the
+        // first words of a question are held rather than lost.
+        try startCapturingMicrophone()
 
         print("🎙️ BuddyDictationManager: opening transcription provider \(transcriptionProvider.displayName)")
 
@@ -544,19 +581,18 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         )
 
         self.activeTranscriptionSession = activeTranscriptionSession
-        print("🎙️ BuddyDictationManager: provider ready, starting audio engine")
+        let heldSeconds = earlyAudioRelay.connect(to: activeTranscriptionSession)
+        print(String(format: "🎙️ BuddyDictationManager: provider ready, sent %.1f s of audio recorded while connecting", heldSeconds))
+        if isFinalizingTranscript {
+            requestFinalTranscriptWithFallback()
+        }
+    }
 
-        let inputNode = audioEngine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
-            self?.activeTranscriptionSession?.appendAudioBuffer(buffer)
+    private func startCapturingMicrophone() throws {
+        try microphoneCapture.start { [weak self] buffer in
+            self?.earlyAudioRelay.receive(buffer)
             self?.updateAudioPowerLevel(from: buffer)
         }
-
-        audioEngine.prepare()
-        try audioEngine.start()
     }
 
     private func handleRecognitionError(_ error: Error) {
@@ -593,8 +629,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             currentDraftCallbacks?.updateDraftText(finalDraftText)
         }
 
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        microphoneCapture.stop()
         activeTranscriptionSession?.cancel()
 
         resetSessionState()
@@ -627,8 +662,13 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     }
 
     private func resetSessionState() {
+        // A fallback left over from an ended session would otherwise fire during the next
+        // one and end it silently.
+        finalizeFallbackWorkItem?.cancel()
+        finalizeFallbackWorkItem = nil
         pendingStartRequestIdentifier = UUID()
         activeTranscriptionSession = nil
+        earlyAudioRelay.reset()
         draftCallbacks = nil
         activeStartSource = nil
         draftTextBeforeCurrentDictation = ""
@@ -862,5 +902,63 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         }
 
         return fallback
+    }
+}
+
+/// Holds the audio recorded while transcription is still connecting, then hands it over in
+/// order once it's ready. The mic used to start only after connecting, which takes about a
+/// second, so the first words of every question were lost.
+private final class EarlyAudioRelay {
+    // The mic delivers audio on its own thread, while connecting finishes on the main thread.
+    private let relayLock = NSLock()
+    private var heldBuffers: [AVAudioPCMBuffer] = []
+    private var heldSeconds = 0.0
+    private var transcriptionSession: (any BuddyStreamingTranscriptionSession)?
+    // A slow connection mustn't hold audio without limit.
+    private let maximumHeldSeconds = 15.0
+
+    func receive(_ buffer: AVAudioPCMBuffer) {
+        relayLock.lock()
+        defer { relayLock.unlock() }
+        if let transcriptionSession {
+            transcriptionSession.appendAudioBuffer(buffer)
+            return
+        }
+        // The engine may reuse a buffer after handing it over, so a held one is copied.
+        guard heldSeconds < maximumHeldSeconds, let bufferCopy = Self.copy(of: buffer) else { return }
+        heldBuffers.append(bufferCopy)
+        heldSeconds += Double(buffer.frameLength) / buffer.format.sampleRate
+    }
+
+    /// Sends everything held, then passes new audio straight through. Returns the seconds sent.
+    func connect(to transcriptionSession: any BuddyStreamingTranscriptionSession) -> Double {
+        relayLock.lock()
+        defer { relayLock.unlock() }
+        for heldBuffer in heldBuffers { transcriptionSession.appendAudioBuffer(heldBuffer) }
+        let sentSeconds = heldSeconds
+        heldBuffers = []
+        heldSeconds = 0
+        self.transcriptionSession = transcriptionSession
+        return sentSeconds
+    }
+
+    func reset() {
+        relayLock.lock()
+        defer { relayLock.unlock() }
+        heldBuffers = []
+        heldSeconds = 0
+        transcriptionSession = nil
+    }
+
+    private static func copy(of buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let bufferCopy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return nil }
+        bufferCopy.frameLength = buffer.frameLength
+        let sourceBuffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: buffer.audioBufferList))
+        let destinationBuffers = UnsafeMutableAudioBufferListPointer(bufferCopy.mutableAudioBufferList)
+        for (sourceBuffer, destinationBuffer) in zip(sourceBuffers, destinationBuffers) {
+            guard let sourceData = sourceBuffer.mData, let destinationData = destinationBuffer.mData else { return nil }
+            memcpy(destinationData, sourceData, Int(min(sourceBuffer.mDataByteSize, destinationBuffer.mDataByteSize)))
+        }
+        return bufferCopy
     }
 }
