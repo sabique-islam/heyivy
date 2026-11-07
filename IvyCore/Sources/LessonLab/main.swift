@@ -107,7 +107,7 @@ final class LabController: NSObject, NSApplicationDelegate {
                 self.startLesson(on: screen, deviceToken: deviceToken)
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 150) { [weak self] in self?.finish(withError: "Timed out.") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (options.interruptCount > 0 ? 600 : 150)) { [weak self] in self?.finish(withError: "Timed out.") }
     }
 
     private static let workerBaseURL = "https://secrets.worker.ivy.ivyx.me"
