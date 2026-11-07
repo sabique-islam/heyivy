@@ -350,7 +350,14 @@ final class EvalController: NSObject, NSApplicationDelegate {
         var landings: [MarkLanding] = []
         var drawnBoxes: [(box: CGRect, landing: MarkLanding)] = []
         for markRequest in markRequests {
-            let resolution = TargetResolver.resolve(mark: markRequest, recognizedWords: recognizedWords, imagePixelSize: sentImageSize)
+            var resolution = TargetResolver.resolve(mark: markRequest, recognizedWords: recognizedWords, imagePixelSize: sentImageSize)
+            // As LessonEngine does: text not found on the whole screen is looked for again in
+            // the area around Claude's position.
+            if resolution == .dropped(.textNotFound) {
+                let roughPoint = CGPoint(x: markRequest.roughPositionInImagePixels.x, y: markRequest.roughPositionInImagePixels.y)
+                let areaWords = await Task.detached { (try? ScreenTextRecognizer.recognizeWords(in: fullResolutionImage, around: roughPoint, reportedInPixelSize: sentImageSize, firstLineIndex: 100_000)) ?? [] }.value
+                resolution = TargetResolver.resolve(mark: markRequest, recognizedWords: recognizedWords + areaWords, imagePixelSize: sentImageSize)
+            }
             let roughPosition = "\(Int(markRequest.roughPositionInImagePixels.x)),\(Int(markRequest.roughPositionInImagePixels.y))"
             var markRecord = MarkRecord(kind: markRequest.kind.rawValue, target: "\(markRequest.target)", roughPosition: roughPosition, outcome: "", landing: nil)
             let drawnBox: CGRect?

@@ -96,10 +96,14 @@ public enum TargetResolver {
         // Only full exact matches count here. A line elsewhere holding one of the words, like
         // "Notifications" in a sidebar, doesn't make "Allow notifications" ambiguous.
         let fullExactMatches = candidates.filter { $0.quality == .exact && $0.matchedWordCount == targetWords.count }
-        let isTheOnlyExactMatchOnScreen = fullExactMatches.count == 1 && nearestCandidate.quality == .exact && nearestCandidate.matchedWordCount == targetWords.count
-        guard isNearRoughPosition || isTheOnlyExactMatchOnScreen else {
-            return .dropped(.textFarFromRoughPosition)
+        let nearestIsAFullExactMatch = nearestCandidate.quality == .exact && nearestCandidate.matchedWordCount == targetWords.count
+        // The one place the whole text appears exactly is trusted wherever it is, and over a
+        // nearer partial match, like a "Notifications" heading near a switch whose label is
+        // "Allow notifications". Text that appears twice is told apart by position instead.
+        if fullExactMatches.count == 1, !nearestIsAFullExactMatch || !isNearRoughPosition, let onlyExactMatch = fullExactMatches.first {
+            return .drawOnText(box: onlyExactMatch.box, matchQuality: .exact)
         }
+        guard isNearRoughPosition else { return .dropped(.textFarFromRoughPosition) }
         return .drawOnText(box: nearestCandidate.box, matchQuality: nearestCandidate.quality)
     }
 
@@ -153,21 +157,24 @@ public enum TargetResolver {
         var everyWordMatchedExactly = true
         for targetWord in targetWords {
             // If a word appears twice on the line, the occurrence nearest the position wins.
-            let matches = lineWords.compactMap { recognizedWord -> (word: RecognizedWord, isExact: Bool)? in
+            let matches = lineWords.compactMap { recognizedWord -> (box: CGRect, isExact: Bool)? in
                 let recognizedText = normalizedForMatching(recognizedWord.text)
-                if recognizedText == targetWord { return (recognizedWord, true) }
-                if isCloseMatch(recognizedText, targetWord) { return (recognizedWord, false) }
+                if recognizedText == targetWord { return (recognizedWord.boxInImagePixels, true) }
+                if let partBox = boxOfCodeTokenInsideWord(targetWord: targetWord, recognizedText: recognizedText, recognizedBox: recognizedWord.boxInImagePixels) {
+                    return (partBox, false)
+                }
+                if isCloseMatch(recognizedText, targetWord) { return (recognizedWord.boxInImagePixels, false) }
                 return nil
             }
             guard let bestMatch = matches.min(by: {
-                ($0.isExact ? 0 : 1, distance(from: roughPosition, to: $0.word.boxInImagePixels))
-                    < ($1.isExact ? 0 : 1, distance(from: roughPosition, to: $1.word.boxInImagePixels))
+                ($0.isExact ? 0 : 1, distance(from: roughPosition, to: $0.box))
+                    < ($1.isExact ? 0 : 1, distance(from: roughPosition, to: $1.box))
             }) else {
                 everyWordMatchedExactly = false
                 continue
             }
             if !bestMatch.isExact { everyWordMatchedExactly = false }
-            matchedBoxes.append(bestMatch.word.boxInImagePixels)
+            matchedBoxes.append(bestMatch.box)
         }
         guard matchedBoxes.count >= wordsNeeded, let firstBox = matchedBoxes.first else { return nil }
         let mergedBox = matchedBoxes.dropFirst().reduce(firstBox) { $0.union($1) }
@@ -188,6 +195,20 @@ public enum TargetResolver {
         let trimmedText = normalizedText.trimmingCharacters(in: edgePunctuation.union(.whitespaces))
         // A word that's all punctuation, like "-", is kept as it is.
         return trimmedText.isEmpty ? normalizedText.trimmingCharacters(in: .whitespaces) : trimmedText
+    }
+
+    /// Recognition often reads a line of code as one long word, like fmt.Println(values[i]).
+    /// A target with code punctuation, like values[i], is then found inside it, and the box is
+    /// narrowed to its share of the characters. Plain words aren't, so "cat" never matches
+    /// inside "category". Seen in the D6 eval, where values[i] otherwise went to a lone
+    /// "values" on the line above.
+    static func boxOfCodeTokenInsideWord(targetWord: String, recognizedText: String, recognizedBox: CGRect) -> CGRect? {
+        let looksLikeCode = targetWord.contains { "()[]{}.<>=:;_/\\\"'".contains($0) }
+        guard looksLikeCode, targetWord.count >= 4, recognizedText.count > targetWord.count,
+              let foundRange = recognizedText.range(of: targetWord) else { return nil }
+        let characterWidth = recognizedBox.width / Double(recognizedText.count)
+        let startOffset = Double(recognizedText.distance(from: recognizedText.startIndex, to: foundRange.lowerBound))
+        return CGRect(x: recognizedBox.minX + startOffset * characterWidth, y: recognizedBox.minY, width: Double(targetWord.count) * characterWidth, height: recognizedBox.height)
     }
 
     /// Tolerates a plural, a cut-off word, one wrong letter in a longer word, and misread

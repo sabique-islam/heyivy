@@ -23,6 +23,39 @@ public enum ScreenTextRecognizer {
         return ProcessInfo.processInfo.systemUptime - startSeconds
     }
 
+    /// Recognizes text in a small area around a point, for when a mark's text wasn't found on
+    /// the whole screen. Vision misses some short text standing alone, like a chart value or
+    /// a "1x" button, but finds it once the area around it is all it looks at. The point and
+    /// the boxes returned are in the screenshot of `reportedInPixelSize`, like `recognizeWords`.
+    /// Line numbers start at `firstLineIndex`, so they never mix with the whole screen's.
+    public static func recognizeWords(in image: CGImage, around pointInReportedPixels: CGPoint, reportedInPixelSize: CGSize, firstLineIndex: Int) throws -> [RecognizedWord] {
+        let areaSizeInReportedPixels = CGSize(width: 360, height: 160)
+        let areaInReportedPixels = CGRect(
+            x: pointInReportedPixels.x - areaSizeInReportedPixels.width / 2,
+            y: pointInReportedPixels.y - areaSizeInReportedPixels.height / 2,
+            width: areaSizeInReportedPixels.width,
+            height: areaSizeInReportedPixels.height
+        ).intersection(CGRect(origin: .zero, size: reportedInPixelSize))
+        guard !areaInReportedPixels.isNull, !areaInReportedPixels.isEmpty else { return [] }
+        let imagePixelsPerReportedPixel = Double(image.width) / reportedInPixelSize.width
+        // CGImage cropping counts from the top left, like the screenshot's pixels.
+        let areaInImagePixels = CGRect(
+            x: areaInReportedPixels.minX * imagePixelsPerReportedPixel,
+            y: areaInReportedPixels.minY * imagePixelsPerReportedPixel,
+            width: areaInReportedPixels.width * imagePixelsPerReportedPixel,
+            height: areaInReportedPixels.height * imagePixelsPerReportedPixel
+        ).integral
+        guard let croppedImage = image.cropping(to: areaInImagePixels) else { return [] }
+        let wordsInArea = try recognizeWords(in: croppedImage, reportedInPixelSize: areaInReportedPixels.size)
+        return wordsInArea.map { wordInArea in
+            RecognizedWord(
+                text: wordInArea.text,
+                boxInImagePixels: wordInArea.boxInImagePixels.offsetBy(dx: areaInReportedPixels.minX, dy: areaInReportedPixels.minY),
+                lineIndex: firstLineIndex + wordInArea.lineIndex
+            )
+        }
+    }
+
     /// Recognizes text on `image`, and reports each word's box in a screenshot of
     /// `reportedInPixelSize`, top-left origin. That lets recognition run on the full-resolution
     /// capture while boxes line up with the smaller image Claude saw.

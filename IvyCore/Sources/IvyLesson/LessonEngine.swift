@@ -261,6 +261,29 @@ public final class LessonEngine {
     private func resolve(_ markRequest: MarkRequest) {
         guard let screen else { return }
         let resolution = TargetResolver.resolve(mark: markRequest, recognizedWords: recognizedWords, imagePixelSize: screen.geometry.imagePixelSize)
+        // Vision misses some short text standing alone, like a chart value or a "1x" button,
+        // but finds it when it looks only at the area around it. In the D6 eval this found
+        // every such mark it was tried on. It takes a moment, so it runs off the main thread,
+        // and a mark that's then too late for its words is dropped as usual.
+        if resolution == .dropped(.textNotFound), let recognizedWords {
+            let fullResolutionImage = screen.fullResolutionImage
+            let imagePixelSize = screen.geometry.imagePixelSize
+            let roughPoint = CGPoint(x: markRequest.roughPositionInImagePixels.x, y: markRequest.roughPositionInImagePixels.y)
+            Task.detached(priority: .userInitiated) { [weak self] in
+                let areaWords = (try? ScreenTextRecognizer.recognizeWords(in: fullResolutionImage, around: roughPoint, reportedInPixelSize: imagePixelSize, firstLineIndex: 100_000)) ?? []
+                let areaResolution = TargetResolver.resolve(mark: markRequest, recognizedWords: recognizedWords + areaWords, imagePixelSize: imagePixelSize)
+                await self?.finishResolving(markRequest, resolution: areaResolution, foundByLookingAroundItsPosition: true)
+            }
+            return
+        }
+        finishResolving(markRequest, resolution: resolution, foundByLookingAroundItsPosition: false)
+    }
+
+    private func finishResolving(_ markRequest: MarkRequest, resolution: TargetResolution, foundByLookingAroundItsPosition: Bool) {
+        guard let screen, !isCancelled else { return }
+        if foundByLookingAroundItsPosition, case .drawOnText = resolution {
+            timingLog.record("mark \(markRequest.markIndex) found by looking around its position")
+        }
         var outcome = MarkOutcome(markIndex: markRequest.markIndex, kind: markRequest.kind, outcome: "", shownAtHeardSeconds: nil, wordStartSeconds: nil)
         let targetBox: CGRect
         switch resolution {

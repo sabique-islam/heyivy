@@ -97,6 +97,25 @@ private func textMark(_ words: [String], near point: PixelPoint, kind: MarkKind 
         #expect(resolution == .dropped(.textNotFound))
     }
 
+    @Test func aCodeTokenIsFoundInsideALineReadAsOneWord() {
+        // Seen in the D6 eval: line 8 came back as one word, and a lone "values" two lines up
+        // was marked instead.
+        let goWords = [
+            word("values", x: 100, y: 213, width: 60, line: 0),
+            word(":=", x: 166, y: 213, width: 20, line: 0),
+            word("fmt.Println(values[i])", x: 130, y: 258, width: 220, line: 1),
+        ]
+        let resolution = TargetResolver.resolve(mark: textMark(["values[i]"], near: PixelPoint(x: 290, y: 262)), recognizedWords: goWords, imagePixelSize: screenImageSize)
+        // "fmt.println(values[i" is 20 characters, 11 wide each, and the token starts at the 13th.
+        #expect(resolution == .drawOnText(box: CGRect(x: 262, y: 258, width: 88, height: 20), matchQuality: .close))
+    }
+
+    @Test func aPlainWordIsNotFoundInsideALongerOne() {
+        let words = [word("Settings", x: 100, y: 100, width: 80, line: 0), word("cat", x: 100, y: 300, width: 30, line: 1)]
+        let resolution = TargetResolver.resolve(mark: textMark(["sett"], near: PixelPoint(x: 120, y: 110)), recognizedWords: words, imagePixelSize: screenImageSize)
+        #expect(resolution == .dropped(.textNotFound))
+    }
+
     @Test func wordsRecognizedWithoutTheirSpaceStillMatch() {
         // Korean "계정 삭제" came back from recognition as one word.
         let koreanWords = [word("일반", x: 100, y: 200, width: 40, line: 0), word("계정삭제", x: 100, y: 300, width: 80, line: 1)]
@@ -125,6 +144,18 @@ private func textMark(_ words: [String], near point: PixelPoint, kind: MarkKind 
             word("notifications", x: 356, y: 260, width: 110, line: 1),
         ]
         // Claude put the position on the switch at the far right of the row.
+        let resolution = TargetResolver.resolve(mark: textMark(["Allow", "notifications"], near: PixelPoint(x: 1700, y: 266)), recognizedWords: settingsWords, imagePixelSize: screenImageSize)
+        #expect(resolution == .drawOnText(box: CGRect(x: 300, y: 260, width: 166, height: 20), matchQuality: .exact))
+    }
+
+    @Test func theOnlyExactMatchWinsOverANearerPartialOne() {
+        // Seen in the D6 eval: the "Notifications" heading was nearer Claude's position on
+        // the switch than the setting's own label was.
+        let settingsWords = [
+            word("Notifications", x: 1500, y: 150, width: 120, line: 0),
+            word("Allow", x: 300, y: 260, width: 50, line: 1),
+            word("notifications", x: 356, y: 260, width: 110, line: 1),
+        ]
         let resolution = TargetResolver.resolve(mark: textMark(["Allow", "notifications"], near: PixelPoint(x: 1700, y: 266)), recognizedWords: settingsWords, imagePixelSize: screenImageSize)
         #expect(resolution == .drawOnText(box: CGRect(x: 300, y: 260, width: 166, height: 20), matchQuality: .exact))
     }
