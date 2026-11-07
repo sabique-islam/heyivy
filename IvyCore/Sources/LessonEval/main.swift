@@ -201,6 +201,9 @@ struct TrialRecord: Encodable {
     var outputTokens: Int
     var estimatedCostUSD: Double
     var recognizedWordCount: Int
+    /// What text recognition read, when a mark was dropped or landed somewhere wrong, to
+    /// see why. The screens are made up, so this holds nothing private.
+    var recognizedWordsForReview: [String]?
     var error: String?
 }
 
@@ -391,7 +394,11 @@ final class EvalController: NSObject, NSApplicationDelegate {
             totalMilliseconds: Int(((ProcessInfo.processInfo.systemUptime - startUptime) * 1000).rounded()),
             inputTokens: usage.input, outputTokens: usage.output,
             estimatedCostUSD: Double(usage.input) * inputUSDPerToken + Double(usage.output) * outputUSDPerToken,
-            recognizedWordCount: recognizedWords.count, error: streamError
+            recognizedWordCount: recognizedWords.count,
+            recognizedWordsForReview: markRecords.contains { $0.outcome.hasPrefix("dropped") || $0.landing == "elsewhere" }
+                ? recognizedWords.map { "\($0.text) @\(Int($0.boxInImagePixels.minX)),\(Int($0.boxInImagePixels.minY)) line \($0.lineIndex)" }
+                : nil,
+            error: streamError
         )
     }
 
@@ -406,7 +413,7 @@ final class EvalController: NSObject, NSApplicationDelegate {
         TrialRecord(caseID: evalCase.id, category: evalCase.category, split: evalCase.split, trial: trial, question: evalCase.question,
                     passed: false, failureReasons: [error], spokenText: "", marks: [], droppedByParser: [], drawnMarkCount: 0,
                     marksOnTarget: 0, marksOnAcceptable: 0, marksOnHostile: 0, marksOnWhatTheyNamed: 0, marksElsewhere: 0, firstTextMilliseconds: nil,
-                    totalMilliseconds: 0, inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0, recognizedWordCount: 0, error: error)
+                    totalMilliseconds: 0, inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0, recognizedWordCount: 0, recognizedWordsForReview: nil, error: error)
     }
 
     private static func shrink(_ image: CGImage, to size: CGSize) -> CGImage? {
