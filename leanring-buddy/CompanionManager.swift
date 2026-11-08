@@ -84,7 +84,7 @@ final class CompanionManager: ObservableObject {
 
     /// Conversation history so Claude remembers prior exchanges within a session.
     /// Each entry is the user's transcript and Claude's response.
-    private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
+    private var conversationHistory: [LessonExchange] = []
 
     /// Draws Ivy's marks over every screen. One for the app's lifetime.
     private let markOverlay = MarkOverlayController()
@@ -675,7 +675,7 @@ final class CompanionManager: ObservableObject {
                     _ = self.lessonStateMachine.handle(.speechFinished(lessonID))
                     // Timings only. The log never holds what was said or shown.
                     print("⏱️ \(lessonEngine.timingLog.summaryLine)")
-                    self.conversationHistory.append((userTranscript: transcript, assistantResponse: lessonEngine.spokenText))
+                    self.conversationHistory.append(LessonExchange(question: transcript, spokenAnswer: lessonEngine.spokenText, marksShown: lessonEngine.marksShown))
                     if self.conversationHistory.count > 10 {
                         self.conversationHistory.removeFirst(self.conversationHistory.count - 10)
                     }
@@ -687,8 +687,7 @@ final class CompanionManager: ObservableObject {
                     self?.handleLessonFailure(failure, lessonID: lessonID)
                 }
 
-                let history = conversationHistory.map { LessonExchange(question: $0.userTranscript, spokenAnswer: $0.assistantResponse) }
-                lessonEngine.run(question: transcript, screen: lessonScreen, history: history)
+                lessonEngine.run(question: transcript, screen: lessonScreen, history: conversationHistory)
             } catch {
                 guard !Task.isCancelled else { return }
                 print("⚠️ Screen capture failed: \(error)")

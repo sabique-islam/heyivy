@@ -66,6 +66,18 @@ public final class LessonEngine {
     /// and then the answer shown as text is already complete.
     public private(set) var hasScriptFinished = false
     /// True once speech has been heard and before it finished, failed or was cancelled.
+    /// The marks the user saw, in the order they appeared, for the next follow-up.
+    public var marksShown: [PastMark] {
+        markOutcomes
+            .filter { $0.shownAtHeardSeconds != nil }
+            .sorted { ($0.shownAtHeardSeconds ?? 0) < ($1.shownAtHeardSeconds ?? 0) }
+            .compactMap { shownOutcome in
+                requestedMarks.first(where: { $0.markIndex == shownOutcome.markIndex }).map {
+                    PastMark(kind: $0.kind, spokenWords: $0.spokenWords, target: $0.target)
+                }
+            }
+    }
+
     public var isSpeaking: Bool { hasHeardFirstAudio && !hasFinished && !voiceHasFailed && !isCancelled }
 
     public private(set) var spokenText = ""

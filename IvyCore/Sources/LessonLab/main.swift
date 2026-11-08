@@ -20,6 +20,8 @@ import IvyOverlay
 //                     thinking and some while speaking, and time how fast each goes quiet.
 //   --soak N          Run N whole lessons in a row and record memory, threads, open files,
 //                     and CPU after each, then check the process for leaks (D7).
+//   --follow-up TEXT  After the first lesson, ask this with the first lesson as history,
+//                     as a follow-up in the app would be, and report both.
 //   --worker URL      Use another Worker, such as scripts/fake-worker.mjs, which stalls or
 //                     drops on purpose (D7).
 //
@@ -43,6 +45,7 @@ struct LabOptions {
     var forcedFailure: String?
     var interruptCount = 0
     var soakLessonCount = 0
+    var followUpQuestion: String?
     var workerBaseURL = "https://secrets.worker.ivy.ivyx.me"
 
     init(arguments: [String]) {
@@ -55,6 +58,7 @@ struct LabOptions {
             case "--force": forcedFailure = nextValue; argumentIndex += 1
             case "--interrupts": interruptCount = Int(nextValue) ?? 20; argumentIndex += 1
             case "--worker": workerBaseURL = nextValue; argumentIndex += 1
+            case "--follow-up": followUpQuestion = nextValue; argumentIndex += 1
             case "--soak": soakLessonCount = Int(nextValue) ?? 100; argumentIndex += 1
             default: break
             }
@@ -127,7 +131,10 @@ final class LabController: NSObject, NSApplicationDelegate {
     private var failuresReported: [String] = []
     private var answerWasShownAsText = false
 
-    private func startLesson(on screen: NSScreen, deviceToken: String) {
+    /// The first lesson, kept so a follow-up can be asked about it.
+    private var lessonHistory: [LessonExchange] = []
+
+    private func startLesson(on screen: NSScreen, deviceToken: String, question: String? = nil) {
         if options.interruptCount > 0 {
             runInterrupts(on: screen, deviceToken: deviceToken, lessonsLeft: options.interruptCount)
             return
@@ -161,8 +168,20 @@ final class LabController: NSObject, NSApplicationDelegate {
         _ = lessonStateMachine.handle(.keyReleased(transcriptIsEmpty: false))
         engine.onFirstAudioHeard = { [weak self] in _ = self?.lessonStateMachine.handle(.firstAudioPlayed(lessonID)) }
         engine.onFinished = { [weak self] in
-            _ = self?.lessonStateMachine.handle(.speechFinished(lessonID))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self?.finish(withError: nil) }
+            guard let self else { return }
+            _ = self.lessonStateMachine.handle(.speechFinished(lessonID))
+            if let followUpQuestion = self.options.followUpQuestion, self.lessonHistory.isEmpty {
+                // Keeps the first lesson as the app would, then asks the follow-up about it.
+                self.lessonHistory = [LessonExchange(question: self.options.question, spokenAnswer: engine.spokenText, marksShown: engine.marksShown)]
+                self.result["firstLesson"] = self.lessonReport(for: engine, question: self.options.question)
+                self.result["marksSentWithFollowUp"] = LessonMemory.describeMarks(fromEarlierAnswers: self.lessonHistory.map(\.marksShown)) ?? "none"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    self.markOverlay.clearAll()
+                    self.startLesson(on: screen, deviceToken: deviceToken, question: followUpQuestion)
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.finish(withError: nil) }
         }
         engine.onScriptFinished = { [weak self] _ in
             guard let self, self.answerWasShownAsText else { return }
@@ -195,7 +214,7 @@ final class LabController: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.finish(withError: nil) }
             }
         }
-        engine.run(question: options.question, screen: lessonScreen, history: [])
+        engine.run(question: question ?? options.question, screen: lessonScreen, history: lessonHistory)
     }
 
     private var interruptReports: [[String: Any]] = []
@@ -396,25 +415,8 @@ final class LabController: NSObject, NSApplicationDelegate {
             result["answerShownAsText"] = answerWasShownAsText
         }
         if let lessonEngine {
-            result["question"] = options.question
-            result["spokenText"] = lessonEngine.spokenText
-            result["timingsMs"] = lessonEngine.timingLog.stageTimesMilliseconds.map { ["stage": $0.stage, "ms": $0.milliseconds] }
-            result["marks"] = lessonEngine.markOutcomes.map { markOutcome -> [String: Any] in
-                var markReport: [String: Any] = ["mark": markOutcome.markIndex, "kind": markOutcome.kind.rawValue, "outcome": markOutcome.outcome]
-                // The lab's screen is its own code, so it can say what each mark pointed at.
-                if let markRequest = lessonEngine.requestedMarks.first(where: { $0.markIndex == markOutcome.markIndex }) {
-                    markReport["spokenWords"] = markRequest.spokenWords
-                    markReport["target"] = "\(markRequest.target)"
-                }
-                if let box = lessonEngine.resolvedBoxesInImagePixels[markOutcome.markIndex] {
-                    markReport["boxInScreenshotPixels"] = "\(Int(box.minX)),\(Int(box.minY)) \(Int(box.width))x\(Int(box.height))"
-                }
-                if let shownAt = markOutcome.shownAtHeardSeconds, let wordStart = markOutcome.wordStartSeconds {
-                    // Negative means the mark appeared before its word, as the lead intends.
-                    markReport["shownMsRelativeToItsWord"] = Int(((shownAt - wordStart) * 1000).rounded())
-                }
-                return markReport
-            }
+            let question = lessonHistory.isEmpty ? options.question : (options.followUpQuestion ?? options.question)
+            for (key, value) in lessonReport(for: lessonEngine, question: question) { result[key] = value }
             print(lessonEngine.timingLog.summaryLine)
             lessonEngine.cancel()
         }
@@ -422,6 +424,30 @@ final class LabController: NSObject, NSApplicationDelegate {
             FileManager.default.createFile(atPath: options.resultPath, contents: resultData)
         }
         NSApp.terminate(nil)
+    }
+
+    private func lessonReport(for lessonEngine: LessonEngine, question: String) -> [String: Any] {
+        var report: [String: Any] = [:]
+        report["question"] = question
+        report["spokenText"] = lessonEngine.spokenText
+        report["timingsMs"] = lessonEngine.timingLog.stageTimesMilliseconds.map { ["stage": $0.stage, "ms": $0.milliseconds] }
+        report["marks"] = lessonEngine.markOutcomes.map { markOutcome -> [String: Any] in
+            var markReport: [String: Any] = ["mark": markOutcome.markIndex, "kind": markOutcome.kind.rawValue, "outcome": markOutcome.outcome]
+            // The lab's screen is its own code, so it can say what each mark pointed at.
+            if let markRequest = lessonEngine.requestedMarks.first(where: { $0.markIndex == markOutcome.markIndex }) {
+                markReport["spokenWords"] = markRequest.spokenWords
+                markReport["target"] = "\(markRequest.target)"
+            }
+            if let box = lessonEngine.resolvedBoxesInImagePixels[markOutcome.markIndex] {
+                markReport["boxInScreenshotPixels"] = "\(Int(box.minX)),\(Int(box.minY)) \(Int(box.width))x\(Int(box.height))"
+            }
+            if let shownAt = markOutcome.shownAtHeardSeconds, let wordStart = markOutcome.wordStartSeconds {
+                // Negative means the mark appeared before its word, as the lead intends.
+                markReport["shownMsRelativeToItsWord"] = Int(((shownAt - wordStart) * 1000).rounded())
+            }
+            return markReport
+        }
+        return report
     }
 }
 

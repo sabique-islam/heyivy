@@ -11,10 +11,13 @@ public struct LessonFailureError: Error, Equatable {
 public struct LessonExchange: Sendable {
     public var question: String
     public var spokenAnswer: String
+    /// What the answer drew that the user saw, so "why that one?" can be resolved.
+    public var marksShown: [PastMark]
 
-    public init(question: String, spokenAnswer: String) {
+    public init(question: String, spokenAnswer: String, marksShown: [PastMark] = []) {
         self.question = question
         self.spokenAnswer = spokenAnswer
+        self.marksShown = marksShown
     }
 }
 
@@ -45,11 +48,17 @@ public enum ClaudeScriptStream {
                         messages.append(["role": "user", "content": exchange.question])
                         messages.append(["role": "assistant", "content": exchange.spokenAnswer])
                     }
-                    messages.append(["role": "user", "content": [
+                    var questionContent: [[String: Any]] = [
                         ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": screenshotJPEGData.base64EncodedString()]],
                         ["type": "text", "text": screenshotLabel],
-                        ["type": "text", "text": question],
-                    ]])
+                    ]
+                    // Sent with the question rather than inside earlier answers, so Claude
+                    // doesn't copy a description format into its own script.
+                    if let earlierMarks = LessonMemory.describeMarks(fromEarlierAnswers: history.map(\.marksShown)) {
+                        questionContent.append(["type": "text", "text": earlierMarks])
+                    }
+                    questionContent.append(["type": "text", "text": question])
+                    messages.append(["role": "user", "content": questionContent])
                     request.httpBody = try JSONSerialization.data(withJSONObject: ["system": systemPrompt, "messages": messages, "stream": true])
 
                     let (responseBytes, response) = try await URLSession.shared.bytes(for: request)
