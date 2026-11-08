@@ -271,6 +271,7 @@ final class LabController: NSObject, NSApplicationDelegate {
                 engine?.cancel()
                 self.markOverlay.clearAll()
                 self.soakSamples.append(ProcessResourceSample.now(afterLesson: lessonNumber, outcome: outcome))
+                if lessonNumber == 10 { Self.recordHeapAndMemoryRegions(toPathsStartingWith: self.options.resultPath + ".lesson-10") }
                 self.runSoak(on: screen, deviceToken: deviceToken, lessonNumber: lessonNumber + 1)
             }
         }
@@ -311,8 +312,26 @@ final class LabController: NSObject, NSApplicationDelegate {
             result["soakCPUSecondsPerLesson"] = (lastSample.cpuSeconds - soakSamples[0].cpuSeconds) / Double(soakSamples.count - 1)
         }
         lessonEngine = nil
+        Self.recordHeapAndMemoryRegions(toPathsStartingWith: options.resultPath + ".lesson-\(options.soakLessonCount)")
         result["leaksCheck"] = Self.checkThisProcessForLeaks(fullOutputPath: options.resultPath + ".leaks.txt")
         finish(withError: nil)
+    }
+
+    /// What's allocated, by class, and how much memory each kind of region holds, so two
+    /// points in a soak can be compared to see what grew.
+    private static func recordHeapAndMemoryRegions(toPathsStartingWith pathPrefix: String) {
+        for (toolPath, arguments, suffix) in [("/usr/bin/heap", ["\(getpid())"], ".heap.txt"), ("/usr/bin/vmmap", ["--summary", "\(getpid())"], ".vmmap.txt")] {
+            let toolProcess = Process()
+            toolProcess.executableURL = URL(fileURLWithPath: toolPath)
+            toolProcess.arguments = arguments
+            let outputPipe = Pipe()
+            toolProcess.standardOutput = outputPipe
+            toolProcess.standardError = outputPipe
+            guard (try? toolProcess.run()) != nil else { continue }
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            toolProcess.waitUntilExit()
+            FileManager.default.createFile(atPath: pathPrefix + suffix, contents: outputData)
+        }
     }
 
     /// Runs Apple's leaks tool on this process, keeps its full report beside the result, and

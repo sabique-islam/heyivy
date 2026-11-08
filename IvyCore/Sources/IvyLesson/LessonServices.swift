@@ -1,5 +1,6 @@
 import Foundation
 import IvyCore
+import Network
 
 /// A lesson failure the state machine knows how to explain.
 public struct LessonFailureError: Error, Equatable {
@@ -134,7 +135,13 @@ public final class VoiceStream {
     private var speechPlayer: StreamingSpeechPlayer?
     /// Audio that arrived before the player was attached, played as soon as it is.
     private var audioWaitingForPlayer: [Data] = []
-    private let webSocketTask: URLSessionWebSocketTask
+    /// Network framework rather than URLSessionWebSocketTask, because URLSession never frees a
+    /// finished WebSocket task: each lesson left one behind, with its connection, request and
+    /// certificates, about 25 to 50 KB, found in the D7 soak.
+    private let connection: NWConnection
+    private var isConnectionReady = false
+    /// Messages sent before the connection is ready go out once it is.
+    private var messagesWaitingForConnection: [String] = []
     private var receivedAudioSeconds = 0.0
     private var isClosedOnPurpose = false
     private var hasFailed = false
@@ -149,16 +156,24 @@ public final class VoiceStream {
     private var hasSentEndOfText = false
     private var silenceCheckTimer: Timer?
 
-    // The Worker closes with these when a device hits its limits.
-    private static let spendLimitCloseCode = 4429
+    // The Worker closes with this when a device hits its spend limit.
+    private static let spendLimitCloseCode: UInt16 = 4429
 
     public init(workerBaseURL: String, deviceToken: String) {
         // http:// is only for a local test Worker, like scripts/fake-worker.mjs.
+        let isLocalTestWorker = workerBaseURL.hasPrefix("http://")
         let webSocketBaseURL = workerBaseURL.replacingOccurrences(of: "https://", with: "wss://").replacingOccurrences(of: "http://", with: "ws://")
-        var request = URLRequest(url: URL(string: "\(webSocketBaseURL)/voice")!)
-        request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
-        webSocketTask = URLSession.shared.webSocketTask(with: request)
-        webSocketTask.maximumMessageSize = 16 * 1024 * 1024
+        let webSocketOptions = NWProtocolWebSocket.Options()
+        webSocketOptions.autoReplyPing = true
+        webSocketOptions.maximumMessageSize = 16 * 1024 * 1024
+        webSocketOptions.setAdditionalHeaders([("Authorization", "Bearer \(deviceToken)")])
+        let parameters = isLocalTestWorker ? NWParameters.tcp : NWParameters.tls
+        parameters.defaultProtocolStack.applicationProtocols.insert(webSocketOptions, at: 0)
+        connection = NWConnection(to: .url(URL(string: "\(webSocketBaseURL)/voice")!), using: parameters)
+    }
+
+    deinit {
+        connection.cancel()
     }
 
     public func attach(speechPlayer: StreamingSpeechPlayer) {
@@ -172,7 +187,11 @@ public final class VoiceStream {
     /// the critical path. By default ElevenLabs waits for about 120 characters before
     /// speaking, so a short first block keeps the first audio quick.
     public func open() {
-        webSocketTask.resume()
+        connection.stateUpdateHandler = { [weak self] connectionState in
+            MainActor.assumeIsolated { self?.connectionStateChanged(to: connectionState) }
+        }
+        // The main queue, so every callback lands where this class lives.
+        connection.start(queue: .main)
         sendMessage(["text": " ", "generation_config": ["chunk_length_schedule": [50]]])
         receiveNextMessage()
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
@@ -199,9 +218,36 @@ public final class VoiceStream {
     }
 
     public func close() {
+        guard !isClosedOnPurpose else { return }
         isClosedOnPurpose = true
         stopCheckingForSilence()
-        webSocketTask.cancel(with: .normalClosure, reason: nil)
+        guard isConnectionReady else {
+            connection.cancel()
+            return
+        }
+        // A polite close lets the Worker end the ElevenLabs side at once. The connection is
+        // cancelled once the close is sent, or after a second if it can't be.
+        let closeMetadata = NWProtocolWebSocket.Metadata(opcode: .close)
+        closeMetadata.closeCode = .protocolCode(.normalClosure)
+        let closeContext = NWConnection.ContentContext(identifier: "close", metadata: [closeMetadata])
+        let connectionToCancel = connection
+        connection.send(content: nil, contentContext: closeContext, isComplete: true, completion: .contentProcessed { _ in connectionToCancel.cancel() })
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { connectionToCancel.cancel() }
+    }
+
+    private func connectionStateChanged(to connectionState: NWConnection.State) {
+        switch connectionState {
+        case .ready:
+            isConnectionReady = true
+            for waitingMessage in messagesWaitingForConnection { sendOnConnection(waitingMessage) }
+            messagesWaitingForConnection = []
+        // Waiting means there's no route, as when offline. It would wait indefinitely.
+        case .failed, .waiting:
+            reportFailure(.voiceFailed)
+            connection.cancel()
+        default:
+            break
+        }
     }
 
     private func startWaitingForVoiceIfNotAlready() {
@@ -232,26 +278,40 @@ public final class VoiceStream {
     private func sendMessage(_ message: [String: Any]) {
         guard let messageData = try? JSONSerialization.data(withJSONObject: message),
               let messageText = String(data: messageData, encoding: .utf8) else { return }
-        webSocketTask.send(.string(messageText)) { _ in }
+        if isConnectionReady {
+            sendOnConnection(messageText)
+        } else {
+            messagesWaitingForConnection.append(messageText)
+        }
+    }
+
+    private func sendOnConnection(_ messageText: String) {
+        let textContext = NWConnection.ContentContext(identifier: "text", metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
+        connection.send(content: Data(messageText.utf8), contentContext: textContext, isComplete: true, completion: .idempotent)
     }
 
     private func receiveNextMessage() {
-        webSocketTask.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                switch result {
-                case .success(.string(let messageText)):
-                    if let messageData = messageText.data(using: .utf8),
-                       let message = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] {
-                        self.apply(message)
-                    }
-                    self.receiveNextMessage()
-                case .success:
-                    self.receiveNextMessage()
-                case .failure:
-                    let failure: LessonFailure = self.webSocketTask.closeCode.rawValue == Self.spendLimitCloseCode ? .spendLimitReached : .voiceFailed
-                    self.reportFailure(failure)
+        connection.receiveMessage { [weak self] messageData, messageContext, _, receiveError in
+            MainActor.assumeIsolated {
+                guard let self, !self.isClosedOnPurpose else { return }
+                let webSocketMetadata = messageContext?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
+                if let webSocketMetadata, webSocketMetadata.opcode == .close {
+                    let closedForSpendLimit: Bool
+                    if case .privateCode(let closeCode) = webSocketMetadata.closeCode { closedForSpendLimit = closeCode == Self.spendLimitCloseCode } else { closedForSpendLimit = false }
+                    self.reportFailure(closedForSpendLimit ? .spendLimitReached : .voiceFailed)
+                    self.connection.cancel()
+                    return
                 }
+                if receiveError != nil {
+                    self.reportFailure(.voiceFailed)
+                    self.connection.cancel()
+                    return
+                }
+                if let messageData, webSocketMetadata?.opcode == .text,
+                   let message = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] {
+                    self.apply(message)
+                }
+                self.receiveNextMessage()
             }
         }
     }
