@@ -11,6 +11,7 @@ import AppKit
 import AVFoundation
 import Combine
 import Foundation
+import Network
 import IvyCore
 import IvyLesson
 import Speech
@@ -909,6 +910,19 @@ final class BuddyDictationManager: NSObject, ObservableObject {
                 return nil
             case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost, .dataNotAllowed:
                 return .offline
+            default:
+                return .transcriptionFailed
+            }
+        }
+        // The transcription connection reports Network framework errors.
+        if let networkError = error as? NWError {
+            switch networkError {
+            case .dns:
+                return .offline
+            case .posix(let posixErrorCode) where [.ENETDOWN, .ENETUNREACH, .EHOSTUNREACH, .ENOTCONN, .ECONNRESET].contains(posixErrorCode):
+                return .offline
+            case .posix(.ECANCELED):
+                return nil
             default:
                 return .transcriptionFailed
             }

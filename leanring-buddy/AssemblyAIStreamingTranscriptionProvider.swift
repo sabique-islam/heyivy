@@ -7,6 +7,7 @@
 
 import AVFoundation
 import Foundation
+import Network
 
 struct AssemblyAIStreamingTranscriptionProviderError: LocalizedError {
     let message: String
@@ -30,12 +31,6 @@ final class AssemblyAIStreamingTranscriptionProvider: BuddyTranscriptionProvider
     var isConfigured: Bool { true }
     var unavailableExplanation: String? { nil }
 
-    /// Single long-lived URLSession shared across all streaming sessions.
-    /// Creating and invalidating a URLSession per session corrupts the OS
-    /// connection pool and causes "Socket is not connected" errors after
-    /// a few rapid reconnections to the same host.
-    private let sharedWebSocketURLSession = URLSession(configuration: .default)
-
     func startStreamingSession(
         keyterms: [String],
         onTranscriptUpdate: @escaping (String) -> Void,
@@ -50,7 +45,6 @@ final class AssemblyAIStreamingTranscriptionProvider: BuddyTranscriptionProvider
         let session = AssemblyAIStreamingTranscriptionSession(
             apiKey: nil,
             temporaryToken: temporaryToken,
-            urlSession: sharedWebSocketURLSession,
             keyterms: keyterms,
             onTranscriptUpdate: onTranscriptUpdate,
             onFinalTranscriptReady: onFinalTranscriptReady,
@@ -131,9 +125,14 @@ private final class AssemblyAIStreamingTranscriptionSession: NSObject, BuddyStre
     private let stateQueue = DispatchQueue(label: "com.learningbuddy.assemblyai.state")
     private let sendQueue = DispatchQueue(label: "com.learningbuddy.assemblyai.send")
     private let audioPCM16Converter = BuddyPCM16AudioConverter(targetSampleRate: targetSampleRate)
-    private let urlSession: URLSession
+    /// Where the connection's callbacks run.
+    private let connectionQueue = DispatchQueue(label: "com.learningbuddy.assemblyai.connection")
 
-    private var webSocketTask: URLSessionWebSocketTask?
+    /// Network framework rather than URLSessionWebSocketTask, because URLSession never frees a
+    /// finished WebSocket task, so each question left one behind with its connection and
+    /// certificates (drawing plan, D7). Each session has its own connection, which is
+    /// cancelled when the session ends.
+    private var connection: NWConnection?
     private var readyContinuation: CheckedContinuation<Void, Error>?
     private var hasResolvedReadyContinuation = false
     private var hasDeliveredFinalTranscript = false
@@ -147,7 +146,6 @@ private final class AssemblyAIStreamingTranscriptionSession: NSObject, BuddyStre
     init(
         apiKey: String?,
         temporaryToken: String?,
-        urlSession: URLSession,
         keyterms: [String],
         onTranscriptUpdate: @escaping (String) -> Void,
         onFinalTranscriptReady: @escaping (String) -> Void,
@@ -155,7 +153,6 @@ private final class AssemblyAIStreamingTranscriptionSession: NSObject, BuddyStre
     ) {
         self.apiKey = apiKey
         self.temporaryToken = temporaryToken
-        self.urlSession = urlSession
         self.keyterms = keyterms
         self.onTranscriptUpdate = onTranscriptUpdate
         self.onFinalTranscriptReady = onFinalTranscriptReady
@@ -168,14 +165,31 @@ private final class AssemblyAIStreamingTranscriptionSession: NSObject, BuddyStre
             keyterms: keyterms
         )
 
-        var websocketRequest = URLRequest(url: websocketURL)
+        let webSocketOptions = NWProtocolWebSocket.Options()
+        webSocketOptions.autoReplyPing = true
         if let apiKey {
-            websocketRequest.setValue(apiKey, forHTTPHeaderField: "Authorization")
+            webSocketOptions.setAdditionalHeaders([("Authorization", apiKey)])
         }
+        let connectionParameters = NWParameters.tls
+        connectionParameters.defaultProtocolStack.applicationProtocols.insert(webSocketOptions, at: 0)
 
-        let webSocketTask = urlSession.webSocketTask(with: websocketRequest)
-        self.webSocketTask = webSocketTask
-        webSocketTask.resume()
+        let connection = NWConnection(to: .url(websocketURL), using: connectionParameters)
+        self.connection = connection
+        connection.stateUpdateHandler = { [weak self] connectionState in
+            switch connectionState {
+            // Waiting means there's no route, as when offline, and it would wait indefinitely.
+            case .failed(let connectionError), .waiting(let connectionError):
+                // This handler can run on any thread, so it hands the failure over. Reporting
+                // goes through the state queue either way.
+                Task { @MainActor [weak self] in
+                    self?.failSession(with: connectionError)
+                    self?.endConnection()
+                }
+            default:
+                break
+            }
+        }
+        connection.start(queue: connectionQueue)
 
         receiveNextMessage()
 
@@ -192,14 +206,7 @@ private final class AssemblyAIStreamingTranscriptionSession: NSObject, BuddyStre
             return
         }
 
-        sendQueue.async { [weak self] in
-            guard let self, let webSocketTask = self.webSocketTask else { return }
-            webSocketTask.send(.data(audioPCM16Data)) { [weak self] error in
-                if let error {
-                    self?.failSession(with: error)
-                }
-            }
-        }
+        sendWebSocketMessage(audioPCM16Data, opcode: .binary)
     }
 
     func requestFinalTranscript() {
@@ -219,30 +226,53 @@ private final class AssemblyAIStreamingTranscriptionSession: NSObject, BuddyStre
         }
 
         sendJSONMessage(["type": "Terminate"])
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        // After the Terminate, on the same queue, so it goes out first.
+        sendQueue.async { [weak self] in
+            guard let self, let connection = self.connection else { return }
+            let closeMetadata = NWProtocolWebSocket.Metadata(opcode: .close)
+            closeMetadata.closeCode = .protocolCode(.goingAway)
+            let closeContext = NWConnection.ContentContext(identifier: "close", metadata: [closeMetadata])
+            connection.send(content: nil, contentContext: closeContext, isComplete: true, completion: .contentProcessed { [weak self] _ in
+                self?.endConnection()
+            })
+        }
+    }
+
+    deinit {
+        connection?.cancel()
+    }
+
+    /// Cancelling is what frees the connection. It's safe to call more than once.
+    private func endConnection() {
+        connection?.cancel()
     }
 
     private func receiveNextMessage() {
-        webSocketTask?.receive { [weak self] result in
+        connection?.receiveMessage { [weak self] messageData, messageContext, _, receiveError in
             guard let self else { return }
 
-            switch result {
-            case .success(let message):
-                switch message {
-                case .string(let text):
-                    self.handleIncomingTextMessage(text)
-                case .data(let data):
-                    if let text = String(data: data, encoding: .utf8) {
-                        self.handleIncomingTextMessage(text)
-                    }
-                @unknown default:
-                    break
-                }
-
-                self.receiveNextMessage()
-            case .failure(let error):
-                self.failSession(with: error)
+            if let receiveError {
+                // Cancelled on purpose, which isn't a failure to report.
+                if case .posix(.ECANCELED) = receiveError { return }
+                self.failSession(with: receiveError)
+                self.endConnection()
+                return
             }
+
+            let webSocketMetadata = messageContext?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
+            // AssemblyAI closes after its Termination message, or on a problem. Either way the
+            // session is over, as when URLSession reported the close as a receive failure.
+            if webSocketMetadata?.opcode == .close {
+                self.failSession(with: AssemblyAIStreamingTranscriptionProviderError(message: "AssemblyAI closed the connection."))
+                self.endConnection()
+                return
+            }
+
+            if let messageData, let text = String(data: messageData, encoding: .utf8) {
+                self.handleIncomingTextMessage(text)
+            }
+
+            self.receiveNextMessage()
         }
     }
 
@@ -386,13 +416,18 @@ private final class AssemblyAIStreamingTranscriptionSession: NSObject, BuddyStre
             return
         }
 
+        sendWebSocketMessage(Data(jsonString.utf8), opcode: .text)
+    }
+
+    private func sendWebSocketMessage(_ messageData: Data, opcode: NWProtocolWebSocket.Opcode) {
         sendQueue.async { [weak self] in
-            guard let self, let webSocketTask = self.webSocketTask else { return }
-            webSocketTask.send(.string(jsonString)) { [weak self] error in
-                if let error {
-                    self?.failSession(with: error)
+            guard let self, let connection = self.connection else { return }
+            let messageContext = NWConnection.ContentContext(identifier: "message", metadata: [NWProtocolWebSocket.Metadata(opcode: opcode)])
+            connection.send(content: messageData, contentContext: messageContext, isComplete: true, completion: .contentProcessed { [weak self] sendError in
+                if let sendError {
+                    self?.failSession(with: sendError)
                 }
-            }
+            })
         }
     }
 
