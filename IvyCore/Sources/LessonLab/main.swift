@@ -167,8 +167,8 @@ final class LabController: NSObject, NSApplicationDelegate {
         let lessonID = lessonStateMachine.currentLessonID
         _ = lessonStateMachine.handle(.keyReleased(transcriptIsEmpty: false))
         engine.onFirstAudioHeard = { [weak self] in _ = self?.lessonStateMachine.handle(.firstAudioPlayed(lessonID)) }
-        engine.onFinished = { [weak self] in
-            guard let self else { return }
+        engine.onFinished = { [weak self, weak engine] in
+            guard let self, let engine else { return }
             _ = self.lessonStateMachine.handle(.speechFinished(lessonID))
             if let followUpQuestion = self.options.followUpQuestion, self.lessonHistory.isEmpty {
                 // Keeps the first lesson as the app would, then asks the follow-up about it.
